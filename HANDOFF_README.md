@@ -57,7 +57,7 @@ hf download xixibuxixi/polis-v1 \
   --repo-type dataset --local-dir plot-bootstrap
 
 cd plot-bootstrap
-sha256sum -c bundles/plot_training_bundle_20260911.tar.zst.sha256
+(cd bundles && sha256sum -c plot_training_bundle_20260911.tar.zst.sha256)
 tar --zstd -xf bundles/plot_training_bundle_20260911.tar.zst
 cd Plot
 source .venv/bin/activate
