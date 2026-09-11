@@ -1,0 +1,16 @@
+# Reproduce the currently checked M3 stack on a Python 3.11 B200 node.
+# Install torch/torchvision from the CUDA 12.8 PyTorch index first if the
+# cluster's package resolver does not understand the +cu128 wheel suffix.
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.7.1+cu128
+torchvision==0.22.1+cu128
+numpy==1.26.4
+opencv-python-headless==4.11.0.86
+einops==0.8.1
+timm==1.0.27
+loguru==0.7.3
+safetensors==0.8.0
+wandb==0.28.1
+ninja==1.13.0
+utils3d @ git+https://github.com/EasternJournalist/utils3d@c5daf6f6c244d251f252102d09e9b7bcef791a38
+nvdiffrast @ git+https://github.com/NVlabs/nvdiffrast.git@253ac4fcea7de5f396371124af597e6cc957bfae

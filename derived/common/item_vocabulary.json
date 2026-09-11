@@ -1,0 +1,19 @@
+{
+  "schema_version": "plot-item-vocabulary-v1",
+  "source_split": "train",
+  "items": {
+    "": 0,
+    "mcl_core:brick_block": 1,
+    "mcl_core:cobble": 2,
+    "mcl_core:dirt": 3,
+    "mcl_core:glass": 4,
+    "mcl_core:stonebrick": 5,
+    "mcl_core:tree": 6,
+    "mcl_core:wood": 7,
+    "mcl_ocean:sea_lantern": 8,
+    "mcl_tools:pick_iron": 9,
+    "textagent_task:npc_axe": 10,
+    "textagent_task:npc_sword": 11,
+    "mcl_tools:sword_iron": 12
+  }
+}

@@ -1,0 +1,2390 @@
+{
+  "schema_version": "plot-m4-text-v1",
+  "encoder": {
+    "name": "google/t5-v1_1-base",
+    "max_length": 64,
+    "status": "embedding-cache-pending"
+  },
+  "texts": [
+    {
+      "text_id": 0,
+      "sha256": "0025ea38c572a5b18d4f3323e28f74e3b87782e1f5f44fc1e713c49062b2947b",
+      "text": "Lay a 4 by 2 floor using glass."
+    },
+    {
+      "text_id": 1,
+      "sha256": "003a9138672ca0b47d444cb386c03a1e14ba80c58fc156a11e48992538facc7c",
+      "text": "Fill the 4 by 4 hole with sea lanterns."
+    },
+    {
+      "text_id": 2,
+      "sha256": "00519bf5c9ffe308a44a0ae0b45ef3477ea9f2efb16841e1b0fa84defa0ec9b7",
+      "text": "Build a 5-wide, 2-high wall using wooden planks, then open a doorway in its center."
+    },
+    {
+      "text_id": 3,
+      "sha256": "0117b7ce6541a67a46c616d1a96ad4ea87b8466f580961e332c5d2a96a02d049",
+      "text": "Fill the 4 by 2 hole with cobblestone."
+    },
+    {
+      "text_id": 4,
+      "sha256": "0233893843fbbb612660093f30e3323192aebc7fd39ae0866ec454a6521dc4e0",
+      "text": "Lay a 4 by 2 floor using cobblestone."
+    },
+    {
+      "text_id": 5,
+      "sha256": "02e6bc7070814e2127bbf2fea6717d1ceffce09462e3645e7bca4495681ece9b",
+      "text": "Lay a 3 by 3 floor using wooden planks."
+    },
+    {
+      "text_id": 6,
+      "sha256": "02e72023952a5d8da93a2c051aa654334eb6baf6ec7512135ef454f8d7bb5a69",
+      "text": "Lay a 3 by 2 floor using glass."
+    },
+    {
+      "text_id": 7,
+      "sha256": "0304afa4d64369b5e0555a86c86a84cb70ac25a5d3f3eb3873baa29d961ef88f",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: glass, layer 2 from bottom: tree trunks."
+    },
+    {
+      "text_id": 8,
+      "sha256": "03ac89b2b3fbd2a7641c06d46ef64c6de576a4558267af7692367e3c8b31bac2",
+      "text": "Build a solid 4 by 2 by 3 cuboid from glass."
+    },
+    {
+      "text_id": 9,
+      "sha256": "048761d49b7691f1a0008bcd5a638ad5fcca798726b92b0e4c3c21ad0d02bb4c",
+      "text": "Lay a 4 by 3 floor using cobblestone."
+    },
+    {
+      "text_id": 10,
+      "sha256": "04abe5147c9e7c9340ddcb5fdea22cf146f88747a1bff23b4b8d7ecb4b18c075",
+      "text": "Lay a 4 by 2 floor using dirt."
+    },
+    {
+      "text_id": 11,
+      "sha256": "058413d309607858ffdbdf0d576ca37a0f909744c2628a43dd047c06427ef5eb",
+      "text": "Dig a 1-layer rectangular pit, then refill it with layer 1 from bottom: wooden planks."
+    },
+    {
+      "text_id": 12,
+      "sha256": "05a84fe96da9dd220077fabbc8870f763281e8dfed64d83794a21591aff14b08",
+      "text": "Fill the 2 by 2 hole with wooden planks."
+    },
+    {
+      "text_id": 13,
+      "sha256": "065156ee32741669955f94c936d15e3c6afd2bd5226d346af8e40275d516376e",
+      "text": "Lay a 3 by 2 floor using wooden planks."
+    },
+    {
+      "text_id": 14,
+      "sha256": "06c5ad9fdf925eb613091e5494827bcc71d45909160ad5009299f11ef8c5850a",
+      "text": "Repair the 3-block gap in the wall with cobblestone."
+    },
+    {
+      "text_id": 15,
+      "sha256": "0752529b3c4122eeefcb8275c98dca537b14501553bdc919ba40214bbf356715",
+      "text": "Build a 5-wide, 3-high wall using dirt, then open a doorway in its center."
+    },
+    {
+      "text_id": 16,
+      "sha256": "076f9402a422841fbcece5f5acd9c861467038ed02434f5fbd23817714b60b53",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: tree trunks, layer 2 from bottom: sea lanterns."
+    },
+    {
+      "text_id": 17,
+      "sha256": "085adf5ed71e96a81846213b88348d142b22a6c26bb2700520b98692ccd727a0",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: cobblestone, layer 2 from bottom: bricks."
+    },
+    {
+      "text_id": 18,
+      "sha256": "0879024269616a0120a4a67338ae8b7432289394c37da71f288f91e0cd5e2683",
+      "text": "Build a solid 3 by 2 by 3 cuboid from cobblestone."
+    },
+    {
+      "text_id": 19,
+      "sha256": "091b402bc7f23dcb6a47a3afba8ae130be33abfad227a98fda05b745705cfe6a",
+      "text": "Dig a 1-layer rectangular pit, then refill it with layer 1 from bottom: sea lanterns."
+    },
+    {
+      "text_id": 20,
+      "sha256": "0a746f162f2fb8c07c9cf774e2d9ed5d68e6e53e55fbbe715f5fc7d954d67b02",
+      "text": "Build a solid 2 by 3 by 3 cuboid from cobblestone."
+    },
+    {
+      "text_id": 21,
+      "sha256": "0a870a18236bc78b5ecec97d308d0694ef74c8c7939a7362567ddf8005b18d67",
+      "text": "Place a 3-block line using sea lanterns."
+    },
+    {
+      "text_id": 22,
+      "sha256": "0b10de56ad780d322f632dccb58a456147b9c80c892fd4cd09f9c707de9f2d21",
+      "text": "Lay a 4 by 4 floor using stone bricks."
+    },
+    {
+      "text_id": 23,
+      "sha256": "0cce42f8ae50a6613e36e188e2b25bff48a3c60ed380daf2635504cbb88afb3d",
+      "text": "Build a solid 3 by 2 by 3 cuboid from wooden planks."
+    },
+    {
+      "text_id": 24,
+      "sha256": "0d47ae1da615c6421bce4da766d8b8994fa7dbebf5a117388ffa61b4c15d0ec7",
+      "text": "Place a 3-block line using cobblestone."
+    },
+    {
+      "text_id": 25,
+      "sha256": "0de15f67b093b8fe9b483d6c9e0df4714943790e6e3e9028411a74a19a98167b",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: sea lanterns, layer 2 from bottom: dirt."
+    },
+    {
+      "text_id": 26,
+      "sha256": "0ea2fafad8bb7520483ab0bdef4a2a8df0dd464aa24c3c1413cf359a2e456c77",
+      "text": "Build a 6-wide, 3-high wall from bricks."
+    },
+    {
+      "text_id": 27,
+      "sha256": "0eb607743adea16aa4869a2abd788f3206705378f3b112a47434ba512fe948db",
+      "text": "Lay a 3 by 3 floor using bricks."
+    },
+    {
+      "text_id": 28,
+      "sha256": "0f2f6ceee6e2c7f58ce16106a00e145900e77f9a5841b86997ce657f47d8d5ad",
+      "text": "Fill the 2 by 2 hole with bricks."
+    },
+    {
+      "text_id": 29,
+      "sha256": "0f5118e5c2d1288544b0ee093d63e4333db20b0cf9aa07c401e24b06cbe59b58",
+      "text": "Build a 5-wide, 2-high wall using glass, then open a doorway in its center."
+    },
+    {
+      "text_id": 30,
+      "sha256": "0fa3aa259a20a90a415751127ab0820532b0e4e01a135278c25360fbe986f30b",
+      "text": "Build a solid 4 by 2 by 3 cuboid from bricks."
+    },
+    {
+      "text_id": 31,
+      "sha256": "105edbfe10469a27fb202badfefd11ae704b5a6e1d430d87940bc0ef1d859677",
+      "text": "Fill the 4 by 4 hole with stone bricks."
+    },
+    {
+      "text_id": 32,
+      "sha256": "10e75b1f31bfff39e560f554da997f83381b2536edc2459aebabb71b082ddf8f",
+      "text": "Build a 6-wide, 2-high wall from dirt."
+    },
+    {
+      "text_id": 33,
+      "sha256": "1128a119def077a9364a64891292bbb350530e5c2b75c8a2e510efd2c15a32ad",
+      "text": "Build a solid 2 by 2 by 3 cuboid from glass."
+    },
+    {
+      "text_id": 34,
+      "sha256": "113560b230c92d8066e0d48dcfccf6fede1bcb315b55dc14f1227de06cc911f9",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: sea lanterns, layer 2 from bottom: bricks."
+    },
+    {
+      "text_id": 35,
+      "sha256": "11632dc912a5338966b49e26a4349cdc5051d71264bedabe9b34d302348bb0c4",
+      "text": "Lay a 2 by 3 floor using dirt."
+    },
+    {
+      "text_id": 36,
+      "sha256": "116ae4993e81d382e4de63ae96b806d1b11f7b332bbce48373e0d4a2667d43c1",
+      "text": "Build a solid 4 by 3 by 3 cuboid from dirt."
+    },
+    {
+      "text_id": 37,
+      "sha256": "11cc11c48fe3affb06edfdf12ed40241350034427b3f12257732782dec0b8f7c",
+      "text": "Build a solid 3 by 1 by 2 cuboid from glass."
+    },
+    {
+      "text_id": 38,
+      "sha256": "11e169c8ca2cdf5f4d747196410f324f58df56b3c6946a82f9cf2e764d6b6f8e",
+      "text": "Build a 4-wide, 3-high wall from cobblestone."
+    },
+    {
+      "text_id": 39,
+      "sha256": "120aa9be8468f35ed7fe00a5e81a318a0d0f93596437eceeb99ca455ecc4f32e",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: dirt, layer 2 from bottom: sea lanterns."
+    },
+    {
+      "text_id": 40,
+      "sha256": "13003793d59ab60ce266dcc49a81edc41e7076061dbc3d43e1ee064580e709b0",
+      "text": "Repair the 2-block gap in the wall with sea lanterns."
+    },
+    {
+      "text_id": 41,
+      "sha256": "134c6edb8e82fe95bf1bafb895550ca111331f2a0fdf4d260ac25558ff89dd27",
+      "text": "Repair the 3-block gap in the wall with wooden planks."
+    },
+    {
+      "text_id": 42,
+      "sha256": "134cad62026beb16f5817ece17732d48b9a5e125ab22081eb9e24e139479c133",
+      "text": "Lay a 2 by 4 floor using wooden planks."
+    },
+    {
+      "text_id": 43,
+      "sha256": "135011e908e0f74164877e3c1245ed4dee1491a0285f8cb88a9fd3eeaffae256",
+      "text": "Build a solid 3 by 2 by 2 cuboid from cobblestone."
+    },
+    {
+      "text_id": 44,
+      "sha256": "13e4bae0fd29dcb1b97c7bec96011ae16c92fc4c3d1f064ed8c55b05cbd5b2f5",
+      "text": "Place a 4-block line using glass."
+    },
+    {
+      "text_id": 45,
+      "sha256": "14b3a676fc6e2a5c00f33751fcfcb8aacdd0547c46be2d56ee5714695ae5ed25",
+      "text": "Place a 2-block line using stone bricks."
+    },
+    {
+      "text_id": 46,
+      "sha256": "154f861b3a0453e30a666f86d6896529f78d068808cbfde0940ceebfd206f984",
+      "text": "Build a solid 4 by 3 by 2 cuboid from cobblestone."
+    },
+    {
+      "text_id": 47,
+      "sha256": "155db1f011568e998476126d76d7f8fcb191960196b0bc4f508e01595e8da2cc",
+      "text": "Place a 4-block line using wooden planks."
+    },
+    {
+      "text_id": 48,
+      "sha256": "15a1663fec05baa44ca8000d45ea78298c1d5c601cf4c5aa1a0cc7b8a4c03ed1",
+      "text": "Build a solid 2 by 3 by 3 cuboid from stone bricks."
+    },
+    {
+      "text_id": 49,
+      "sha256": "1676f3c0b72f6fac815ee56ae1ef5836cce480c2305a78033aa311b9d8fba576",
+      "text": "Build a solid 2 by 1 by 3 cuboid from dirt."
+    },
+    {
+      "text_id": 50,
+      "sha256": "172b40d99ab84e1a982c28b4b3faaacb57ee551dfd1995e08ee70232ea68dbbe",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: cobblestone, layer 2 from bottom: tree trunks."
+    },
+    {
+      "text_id": 51,
+      "sha256": "178876cab55e78ddbf8004609dd187c302205065c299e6a777be0347c0fdbefd",
+      "text": "Place a 5-block line using stone bricks."
+    },
+    {
+      "text_id": 52,
+      "sha256": "18996bf0c81a562fe683eba382b869f9b59ecf5a44bba26657cd9360b510ca27",
+      "text": "Build a solid 4 by 1 by 2 cuboid from bricks."
+    },
+    {
+      "text_id": 53,
+      "sha256": "199911c994d63f22e9e48305a7ba1bad26473ced8ed2ba0529f8b28f6064a83b",
+      "text": "Build a solid 2 by 3 by 3 cuboid from sea lanterns."
+    },
+    {
+      "text_id": 54,
+      "sha256": "19baec85bb43649e09b7dfebeae5130c13ddd25b1b9362e62c4b723d7551bcdd",
+      "text": "Lay a 4 by 2 floor using stone bricks."
+    },
+    {
+      "text_id": 55,
+      "sha256": "19c82233ecb0b466c69f4552725918dd6b8613db5de92552e1ec87469a16dba9",
+      "text": "Lay a 3 by 4 floor using bricks."
+    },
+    {
+      "text_id": 56,
+      "sha256": "1a1478e30be7d7286d04294c9521a4b44da88f91540fe5ab0b60dc70b40e1817",
+      "text": "Build a solid 2 by 1 by 2 cuboid from bricks."
+    },
+    {
+      "text_id": 57,
+      "sha256": "1a261d6d89ddf87038f4905f646d6a3331984cd1ef909c7c98f1c5933f2fc484",
+      "text": "Lay a 4 by 3 floor using sea lanterns."
+    },
+    {
+      "text_id": 58,
+      "sha256": "1a8cace7dc63521fbd6469d305ba005e8eb8dac64ac91bfa5431a8616e9497a9",
+      "text": "Build a 5-wide, 3-high wall using wooden planks, then open a doorway in its center."
+    },
+    {
+      "text_id": 59,
+      "sha256": "1aaa50e3d60fbcb2ea70871d22af75e2b8151e57f4f8638696db23fc84937d9b",
+      "text": "Build a solid 4 by 2 by 2 cuboid from wooden planks."
+    },
+    {
+      "text_id": 60,
+      "sha256": "1c5f4cb5926eaf858f4917de9cabb398dcfaa05ce506e2c639b7d3fc69d09a55",
+      "text": "Fill the 4 by 2 hole with dirt."
+    },
+    {
+      "text_id": 61,
+      "sha256": "1c6a78e5ee62efc6fa2791e9a8976bb699af3263272efacf23862d463f0b812c",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: bricks, layer 2 from bottom: glass."
+    },
+    {
+      "text_id": 62,
+      "sha256": "1c896c9705177c26111a88697c33d67c9fe4115aab0af3e34a5915aebabcf048",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: dirt, layer 2 from bottom: glass."
+    },
+    {
+      "text_id": 63,
+      "sha256": "1cb074f601a4f0f7d62710f3cc1db5e9ea58f0826e3bed15c173189ce9259ed1",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: dirt, layer 2 from bottom: wooden planks."
+    },
+    {
+      "text_id": 64,
+      "sha256": "1d6b21a5c1bb709442751f582bd31e23e85bc487f714ee8d0bb2a266cbb0b6e5",
+      "text": "Lay a 3 by 3 floor using cobblestone."
+    },
+    {
+      "text_id": 65,
+      "sha256": "1e00ea4224ac9531be2a3acf7a260148822d851d50e1d01118af001a3321e6c6",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: dirt, layer 2 from bottom: stone bricks."
+    },
+    {
+      "text_id": 66,
+      "sha256": "1e18cceb9a3a001ad3498eacb6cbaeaedf6623ce7fa6ff69fcf1a3f6741ec330",
+      "text": "Place a 4-block line using cobblestone."
+    },
+    {
+      "text_id": 67,
+      "sha256": "1e969a3006689120d2c79050e2f9ad3d25de223dece3e0fb8819bb7893edb588",
+      "text": "Lay a 2 by 2 floor using cobblestone."
+    },
+    {
+      "text_id": 68,
+      "sha256": "1fbab515d38d4fc3abb2dd861b7f67d3221bbf11fb1f19396df0d1b649091aaf",
+      "text": "Build a 3-wide, 3-high wall from sea lanterns."
+    },
+    {
+      "text_id": 69,
+      "sha256": "1fd914f9dd3c7e882af6313ffe78eef8809ee2fc56cfcea4d2a1fc99e27d19fa",
+      "text": "Build a solid 2 by 3 by 2 cuboid from glass."
+    },
+    {
+      "text_id": 70,
+      "sha256": "20272010526708f0549c9e905e99773f3ae9fdfc98658218960ef1157b7f923e",
+      "text": "Fill the 3 by 2 hole with dirt."
+    },
+    {
+      "text_id": 71,
+      "sha256": "20b3e295d2fff235b45c94caed9e51ac1fd5961217076f5a18739b42f6e91974",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: wooden planks, layer 2 from bottom: glass."
+    },
+    {
+      "text_id": 72,
+      "sha256": "21cd21e92a308e59e5bcdb192cce4b1de17e3f9524f5bf56e3d8b375604c44d5",
+      "text": "Build a 5-wide, 3-high wall using bricks, then open a doorway in its center."
+    },
+    {
+      "text_id": 73,
+      "sha256": "226b443fe37e5bdb02a444597e2ae1c843bad6607325e46abf3c25fa0bd44fd7",
+      "text": "Place a 5-block line using cobblestone."
+    },
+    {
+      "text_id": 74,
+      "sha256": "22b7ccb8cd7e92932c1879862ad8951a8d9deb1f54de0e788bd4af113fcb049f",
+      "text": "Build a solid 4 by 2 by 3 cuboid from wooden planks."
+    },
+    {
+      "text_id": 75,
+      "sha256": "23416da725ad4376c791c42d4c7db78ea0fa365174c2425818f1976a338e1362",
+      "text": "Repair the 5-block gap in the wall with glass."
+    },
+    {
+      "text_id": 76,
+      "sha256": "23cc4e98c2a1e74156331a84a80df09f6168c091ef1a31d72fc8788710f5d28e",
+      "text": "Fill the 3 by 3 hole with dirt."
+    },
+    {
+      "text_id": 77,
+      "sha256": "23da37ed30e9ae0e752763d2008c316a98ab871ab00684e472b5a27c4b3e9d7e",
+      "text": "Build a solid 4 by 1 by 3 cuboid from wooden planks."
+    },
+    {
+      "text_id": 78,
+      "sha256": "24d6b578d7011c0027872ad1af2c721a8075aa973044f6938bb33393a3f8dac9",
+      "text": "Build a 3-wide, 3-high wall from stone bricks."
+    },
+    {
+      "text_id": 79,
+      "sha256": "25088ffe851c0c7bbc84ea0700b9955118be9c69e5ddb7786830d1043149e5a6",
+      "text": "Build a 3-wide, 2-high wall from bricks."
+    },
+    {
+      "text_id": 80,
+      "sha256": "268618eb3e4c2ff17765807db6a47f8bd39941240f6057d5fe2e2bdf9f63b2b5",
+      "text": "Build a 6-wide, 2-high wall from wooden planks."
+    },
+    {
+      "text_id": 81,
+      "sha256": "2689ea7a8bb5e431c32733bf5eb7969d06fdd8ecc2b2a7f58e9d50f5fdf8cf8f",
+      "text": "Build a solid 4 by 1 by 2 cuboid from sea lanterns."
+    },
+    {
+      "text_id": 82,
+      "sha256": "26a9a037fdcae8483486b3e4bc0f7f9b79dc38bbb69bd7be752828603aa499f2",
+      "text": "Build a 5-wide, 3-high wall from cobblestone."
+    },
+    {
+      "text_id": 83,
+      "sha256": "294b415d98336d59cda0c946f40c8a2e7511bb0471b10ae7408ee1ec4fc39179",
+      "text": "Build a 3-wide, 2-high wall from glass."
+    },
+    {
+      "text_id": 84,
+      "sha256": "2998535bee4682a6d2d6f71749e5946c24092245e6b9b78b2c6c3c95841384cb",
+      "text": "Dig a 1-layer rectangular pit, then refill it with layer 1 from bottom: cobblestone."
+    },
+    {
+      "text_id": 85,
+      "sha256": "29e0302f765723306c6794d85097205593c4675a508f1d781746933167daf5e8",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: bricks, layer 2 from bottom: sea lanterns."
+    },
+    {
+      "text_id": 86,
+      "sha256": "2a6c82ad33733c21dd920e94970d4119ce1fea395b4ba0636f30460ca0e79478",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: wooden planks, layer 2 from bottom: wooden planks."
+    },
+    {
+      "text_id": 87,
+      "sha256": "2b6feef737944d83d33702363ff464e0dbc20bb2f836791c5f5c8cdaea1097c0",
+      "text": "Build a 5-wide, 3-high wall using cobblestone, then open a doorway in its center."
+    },
+    {
+      "text_id": 88,
+      "sha256": "2bbc0cd169e3e8aa4cc1a6952694def9b8f4bb6bde57a21d26a17e3fb93aee10",
+      "text": "Fill the 4 by 3 hole with wooden planks."
+    },
+    {
+      "text_id": 89,
+      "sha256": "2bf10ef81cae773a6d006c56d5bdb0769a0a40505acfcb1e09d5bb8000ae8eb1",
+      "text": "Build a solid 3 by 2 by 2 cuboid from glass."
+    },
+    {
+      "text_id": 90,
+      "sha256": "2c3f8fe4b5e84d634e7c18c608b286ade5be8bf636a1e21c33a278833b099bfd",
+      "text": "Build a 5-wide, 2-high wall from dirt."
+    },
+    {
+      "text_id": 91,
+      "sha256": "2e0f160b948c296df8a433852bce44976f1fed840c904e508919ab9b1bab569b",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: wooden planks, layer 2 from bottom: dirt."
+    },
+    {
+      "text_id": 92,
+      "sha256": "2e3ef8ba120d3fe97316b19f73ebef1baa65f090fdf65a6593e3ef7c59fd3383",
+      "text": "Build a solid 3 by 3 by 3 cuboid from wooden planks."
+    },
+    {
+      "text_id": 93,
+      "sha256": "2e7a05dfcbc1d1a4e3a716c123087cb1fd74f22fd100542565b6c602b137d849",
+      "text": "Build a solid 3 by 2 by 2 cuboid from bricks."
+    },
+    {
+      "text_id": 94,
+      "sha256": "2f2ab46659052ea3168d319b0bacbd766bc5fc49c95d9330ba0ba93fd05676be",
+      "text": "Lay a 2 by 2 floor using sea lanterns."
+    },
+    {
+      "text_id": 95,
+      "sha256": "2fd2aa0a950893ee02583cc15c1993a9a7e1b39c9437c64bd49d90384a405301",
+      "text": "Lay a 3 by 3 floor using dirt."
+    },
+    {
+      "text_id": 96,
+      "sha256": "303a6e04bef1fac1b396eea52e8149fbbe5148643d4140ebb3e480e82fef7cd8",
+      "text": "Repair the 4-block gap in the wall with bricks."
+    },
+    {
+      "text_id": 97,
+      "sha256": "3055a7591b12d148d116b1eb3d38ebfd3bbecf6226c0224dbbac93b28188c5ff",
+      "text": "Lay a 3 by 4 floor using stone bricks."
+    },
+    {
+      "text_id": 98,
+      "sha256": "314cbc91a0b010cd40e1362894f79de67449db4731d297744616436c7925bde6",
+      "text": "Build a 4-wide, 2-high wall from bricks."
+    },
+    {
+      "text_id": 99,
+      "sha256": "3212d6fb9709670ec2c84a66b791436e4ca3b10793377955fa7e804df551cf4b",
+      "text": "Fill the 2 by 3 hole with dirt."
+    },
+    {
+      "text_id": 100,
+      "sha256": "3279f4e3652cb0ddb2cf124bc54e6a5f441b5ebc6ddfdda6286ade7fd16b1d52",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: glass, layer 2 from bottom: sea lanterns."
+    },
+    {
+      "text_id": 101,
+      "sha256": "32fed2ef6bb526ec283aa7e0888de1e52af2e2a170cfe69274b37871f5e4aa53",
+      "text": "Build a 3-wide, 3-high wall from dirt."
+    },
+    {
+      "text_id": 102,
+      "sha256": "34c554cfc54129d93ddd3cb28c4186676e2138c6fe2519773dae999d999d108b",
+      "text": "Build a solid 3 by 1 by 2 cuboid from dirt."
+    },
+    {
+      "text_id": 103,
+      "sha256": "36d49cb293f7266fe181bf3a752552e0b9a60fde1930f9cd3b9163d730953702",
+      "text": "Lay a 3 by 2 floor using stone bricks."
+    },
+    {
+      "text_id": 104,
+      "sha256": "36ffcaf1880cdd6696c626e150536352abda015f935ce375bd2fa43b1877044a",
+      "text": "Fill the 3 by 2 hole with sea lanterns."
+    },
+    {
+      "text_id": 105,
+      "sha256": "3706bf19eea40320c439eba3a5988cbb6f3e64ec5b1fa8064a8488bf3542f765",
+      "text": "Place a 4-block line using sea lanterns."
+    },
+    {
+      "text_id": 106,
+      "sha256": "374cbf6046813c432d00cc9900b01f8313a6fe9a2d0f45390d0ad8ad99f6a2fc",
+      "text": "Build a solid 2 by 3 by 3 cuboid from bricks."
+    },
+    {
+      "text_id": 107,
+      "sha256": "3837557b66f6d8ab80da8f2249a795d44ce9798e2d8105c67c48f82802c740e5",
+      "text": "Repair the 3-block gap in the wall with stone bricks."
+    },
+    {
+      "text_id": 108,
+      "sha256": "38f61379b016cba6d904b43b69a87d3a7217690345e974277486cbac5f7bb694",
+      "text": "Build a 6-wide, 2-high wall from bricks."
+    },
+    {
+      "text_id": 109,
+      "sha256": "391f30fcac4cfe56979ac8958e0f95212e46646f6e8aaa8e0c85c0f6c0604659",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: sea lanterns, layer 2 from bottom: stone bricks."
+    },
+    {
+      "text_id": 110,
+      "sha256": "399a9e26ce60677da50232e33541e6ed6edb57669ff058c4d9be01252fae71df",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: bricks, layer 2 from bottom: stone bricks."
+    },
+    {
+      "text_id": 111,
+      "sha256": "39ed85983183cfff0cf361cb50b728b820969a7defb19cb2a47a31b198e2008c",
+      "text": "Build a solid 2 by 1 by 3 cuboid from wooden planks."
+    },
+    {
+      "text_id": 112,
+      "sha256": "3a77f236a91076bddf14f39f11d4ca291382c77a1a4bd642c0fb51b38b3b14af",
+      "text": "Fill the 4 by 4 hole with wooden planks."
+    },
+    {
+      "text_id": 113,
+      "sha256": "3ba5c6f46256861a6b0f2603989bea3ddaaa95a1c361e3f48a2666236016c316",
+      "text": "Fill the 2 by 4 hole with wooden planks."
+    },
+    {
+      "text_id": 114,
+      "sha256": "3c35e3e30600e82d895045eea44d62ff85b0622386a4780fd78007b58dea77fc",
+      "text": "Place a 3-block line using bricks."
+    },
+    {
+      "text_id": 115,
+      "sha256": "3c633d38a0c2bedb4ab81c2e5d13e79f215781b35331f8fed411a0a12d4c128a",
+      "text": "Build a solid 2 by 2 by 2 cuboid from sea lanterns."
+    },
+    {
+      "text_id": 116,
+      "sha256": "3d0282dce972029b9c15098eaa00ce91e253edc1825b02161c49b3cd2fad4da3",
+      "text": "Repair the 2-block gap in the wall with bricks."
+    },
+    {
+      "text_id": 117,
+      "sha256": "3d3723c621aad4d3e6ec23b3c179c32644a12566cfefda96c8ffa62304b7baa0",
+      "text": "Fill the 2 by 2 hole with glass."
+    },
+    {
+      "text_id": 118,
+      "sha256": "3d3751943120973cbd150e0f3f49060618d832f12bc96df346ba2d6b2ce28b42",
+      "text": "Build a solid 4 by 3 by 2 cuboid from bricks."
+    },
+    {
+      "text_id": 119,
+      "sha256": "3db93d177b870c59ac90b8e36cec7a01614f162138ccbaa308749e7b676bc6eb",
+      "text": "Fill the 4 by 3 hole with sea lanterns."
+    },
+    {
+      "text_id": 120,
+      "sha256": "3f8a8c4fe958eb17b86b9e9426e5007dc6c58cabfaa06028ec55d4a2d69fd120",
+      "text": "Build a 5-wide, 3-high wall from bricks."
+    },
+    {
+      "text_id": 121,
+      "sha256": "3fad0dcf0c3f5cb1e073bb8e575df5cb51c7612fad3221dd75f3aa5d555b5453",
+      "text": "Build a solid 2 by 1 by 3 cuboid from bricks."
+    },
+    {
+      "text_id": 122,
+      "sha256": "3fd1bcf6181761217de748a806bc6b6345518fbbf58718318a49a0a2c4f1a9d2",
+      "text": "Dig a 4 by 2 hole in front of you."
+    },
+    {
+      "text_id": 123,
+      "sha256": "40fbd64ed8a82d226b87184442a1ee7addf5bb2b822c6f976afe523edac582ac",
+      "text": "Build a 4-wide, 2-high wall from dirt."
+    },
+    {
+      "text_id": 124,
+      "sha256": "41acd99ddb5441ccc0325ea37819c2d7bcda4595030a21dda67179150b416c72",
+      "text": "Build a solid 4 by 2 by 3 cuboid from stone bricks."
+    },
+    {
+      "text_id": 125,
+      "sha256": "429ec6e5bc3b27c099d983584a6de63f5dc70fa2689e3b40ad8ec5663fbed84c",
+      "text": "Dig a 4 by 3 hole in front of you."
+    },
+    {
+      "text_id": 126,
+      "sha256": "42bcc44d2fc090bde2d6cab047e24823b5c99e7893d5106b071ea9bd3d3bcf9a",
+      "text": "Build a 4-wide, 2-high wall from wooden planks."
+    },
+    {
+      "text_id": 127,
+      "sha256": "43cd1d5f43c7a58ca257e6d3778f60a7c50bde034bd098d79a77ed4c8f1372b4",
+      "text": "Lay a 2 by 3 floor using wooden planks."
+    },
+    {
+      "text_id": 128,
+      "sha256": "43d5884465346fce018ab2bfadc8f5064a2704d2deb89fa3cf9615f31a021c7b",
+      "text": "Place a 2-block line using dirt."
+    },
+    {
+      "text_id": 129,
+      "sha256": "45362328eab19185d3bdee6d8acd64ceb8f3b05d667cedaf44b5ace94b6d41bb",
+      "text": "Build a 4-wide, 2-high wall from glass."
+    },
+    {
+      "text_id": 130,
+      "sha256": "45f8ca7d9b511e5a68fa93fd6958fe99a11ddc942c5186ad12d7f3448a6f90ec",
+      "text": "Build a 3-wide, 3-high wall using sea lanterns, then open a doorway in its center."
+    },
+    {
+      "text_id": 131,
+      "sha256": "46205e74733a95d2b5a7601e0d72f53c4a5ee3fd0772a654e1b0dd440993aa9a",
+      "text": "Build two towers and connect their tops with a bridge."
+    },
+    {
+      "text_id": 132,
+      "sha256": "46707a7f0700bc6c1f14d9f0e5bf29ff965e40486a1e59df687c28806fc8be93",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: tree trunks, layer 2 from bottom: tree trunks."
+    },
+    {
+      "text_id": 133,
+      "sha256": "468acf02d0832fd14bce874b5ad8901cf2c9db43ac7c2a8cc35844ce6bdff449",
+      "text": "Build a solid 2 by 1 by 2 cuboid from glass."
+    },
+    {
+      "text_id": 134,
+      "sha256": "4783a960d2fec0d2bfa461dc0d2fb7e7ed3d08508689db7d9a635d0706b89413",
+      "text": "Fill the 2 by 4 hole with stone bricks."
+    },
+    {
+      "text_id": 135,
+      "sha256": "48f4f18341e3f04f7ed3dde2ce49edf73e8f3f19c3bc456419238a2d39b01d11",
+      "text": "Fill the 4 by 2 hole with bricks."
+    },
+    {
+      "text_id": 136,
+      "sha256": "4904d698a1603f3cfe3d29d28d56302753199fe88ecf2f6b32de7ccc866fa2f8",
+      "text": "Lay a 3 by 4 floor using sea lanterns."
+    },
+    {
+      "text_id": 137,
+      "sha256": "490dfad3f9c2aeeb19aad5ff689f34c17d8c27f596db647fe4ea2bc2a19243b7",
+      "text": "Build a 6-wide, 2-high wall from stone bricks."
+    },
+    {
+      "text_id": 138,
+      "sha256": "4958680064f2d046d33761ee079b1f03a9a139bb5e5fe7dc0b3dc86e9395d842",
+      "text": "Build a compact house with walls, a doorway, and a roof."
+    },
+    {
+      "text_id": 139,
+      "sha256": "49a15bc58829343a3ac57df0d42918b08cb4e2f2c10673585a60ff029789f4e8",
+      "text": "Lay a 2 by 4 floor using stone bricks."
+    },
+    {
+      "text_id": 140,
+      "sha256": "49dcf9022e7da358dffa70d372d5310e14e1bf9fd2207e2bc22fc5963c47c076",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: stone bricks, layer 2 from bottom: bricks."
+    },
+    {
+      "text_id": 141,
+      "sha256": "4a2a5edec0c0eebccc0756aed6a50ac6c6a61c61d0d751cf4b297a5f3deb60f0",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: dirt, layer 2 from bottom: bricks."
+    },
+    {
+      "text_id": 142,
+      "sha256": "4a4350de8d48484c8304649bda5f32c02a009b83f8bc53ab6d4e43b709b6c93a",
+      "text": "Fill the 4 by 4 hole with glass."
+    },
+    {
+      "text_id": 143,
+      "sha256": "4a7ecdcef3c51d7fd889e5a5d2643f78ecdb3816c02e91fbe7ea333f7bf8ef81",
+      "text": "Build a 6-wide, 2-high wall from cobblestone."
+    },
+    {
+      "text_id": 144,
+      "sha256": "4a836a3174ce1b1600b6eed942751009b32eafcac8f8818fce36f4c2fad788b0",
+      "text": "Build a 6-wide, 3-high wall from dirt."
+    },
+    {
+      "text_id": 145,
+      "sha256": "4b9b18c29556b0df5f52eae8c33e52cf1da4f4ffe775945e781b0e20b12290a1",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: wooden planks, layer 2 from bottom: cobblestone."
+    },
+    {
+      "text_id": 146,
+      "sha256": "4c02a16c0b58c7dd6118d345af701d82a4c8ee965cb423cade395341a9196f79",
+      "text": "Build a 3-wide, 3-high wall using dirt, then open a doorway in its center."
+    },
+    {
+      "text_id": 147,
+      "sha256": "4c340a648ff484a6253f461dedbec8bea6f0cb2ffb7d5a61bcb6b8d365594f8a",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: tree trunks, layer 2 from bottom: stone bricks."
+    },
+    {
+      "text_id": 148,
+      "sha256": "4c4836393374d7bd31e0f7471e2778da8e8325a05a1f6ac304ec1923f763884d",
+      "text": "Repair the 4-block gap in the wall with stone bricks."
+    },
+    {
+      "text_id": 149,
+      "sha256": "4c63fe5d1b993cc7566a01d129d83a5e2c8e0f8f88281f590517dc65dbb99f13",
+      "text": "Fill the 3 by 3 hole with sea lanterns."
+    },
+    {
+      "text_id": 150,
+      "sha256": "4d48b9750e00c2f5a377c3be8dd8278f195bf8fb766cc64ea044ee358f41ff68",
+      "text": "Fill the 3 by 2 hole with glass."
+    },
+    {
+      "text_id": 151,
+      "sha256": "4def587d0d7eb2586f6da43a91b84a4f61732402ae3172fa31cf506002e7be3a",
+      "text": "Dig a 1-layer rectangular pit, then refill it with layer 1 from bottom: bricks."
+    },
+    {
+      "text_id": 152,
+      "sha256": "4e1ec1ff4ef2e06f0fb04d67a31c308251a3d5ec63cc1a9e0d5ec87fc2963f15",
+      "text": "Build a solid 4 by 2 by 3 cuboid from cobblestone."
+    },
+    {
+      "text_id": 153,
+      "sha256": "4e4d7cd091f8f8ed0469e6df10099665c4985063c3ff6fb7a42501bdf4f29b0e",
+      "text": "Place a 2-block line using glass."
+    },
+    {
+      "text_id": 154,
+      "sha256": "4ec946e98fcbeb41302daa68191d05934cc43d751a7f4d5391a17589a6fdb26f",
+      "text": "Fill the 2 by 2 hole with cobblestone."
+    },
+    {
+      "text_id": 155,
+      "sha256": "4ecdd1f9431cad0cb1bead8ae797ee3767fea3dbebed89a9ce6b97e0ed528ac6",
+      "text": "Build a solid 3 by 2 by 3 cuboid from bricks."
+    },
+    {
+      "text_id": 156,
+      "sha256": "4f5815fa4799f26fa596a91cda6d881ebe82a9beaaafb886723ad572072c234a",
+      "text": "Repair the 3-block gap in the wall with sea lanterns."
+    },
+    {
+      "text_id": 157,
+      "sha256": "50bb420f840b7d0c498b7184308d4f40db342278725b774f3e8edc4aa09d8e71",
+      "text": "Build a solid 4 by 3 by 3 cuboid from sea lanterns."
+    },
+    {
+      "text_id": 158,
+      "sha256": "51839e5ab2c8d850bbc15fcd1ec21c43586deb78c42371cba00764eddb97fd8d",
+      "text": "Fill the 2 by 4 hole with sea lanterns."
+    },
+    {
+      "text_id": 159,
+      "sha256": "51c2498a274f28d6c0410a7cd59c9b1f3e1fb4cc68b0c5a22933183905ea29ee",
+      "text": "Lay a 2 by 2 floor using stone bricks."
+    },
+    {
+      "text_id": 160,
+      "sha256": "52b8a237d44c3eb5a584588aea124b648bb4f91ea961b21e733718abaa3043cc",
+      "text": "Fill the 4 by 2 hole with glass."
+    },
+    {
+      "text_id": 161,
+      "sha256": "54bc7783115a1891b52c0635561b2c333034c734d22dc12fb4ea821b20cb3c3b",
+      "text": "Lay a 3 by 2 floor using dirt."
+    },
+    {
+      "text_id": 162,
+      "sha256": "54d1ec001b6df5d20aa03f38bbdd7a4b448d561fb6d62847d70ba31468df6384",
+      "text": "Dig a 4 by 4 hole in front of you."
+    },
+    {
+      "text_id": 163,
+      "sha256": "5609edf905fb559bb4556242bd00efaaffa07b73497d2dabc467b7d673afcf9d",
+      "text": "Build a solid 4 by 3 by 3 cuboid from glass."
+    },
+    {
+      "text_id": 164,
+      "sha256": "5638f38d7feffe425a211afdc76c6d66aee42916be6c74ceb2afac62c4aba244",
+      "text": "Build a 5-wide, 2-high wall from bricks."
+    },
+    {
+      "text_id": 165,
+      "sha256": "569ec94f4200b9f2afb3c39732ec53fbdd1ec4f83bac1343a76ee23e27b84f98",
+      "text": "Lay a 3 by 2 floor using bricks."
+    },
+    {
+      "text_id": 166,
+      "sha256": "57ac63130ee3fe6cac5a49ad7bc70692b0805f9b8b6a927f6f9b7fb6031c8fe1",
+      "text": "Build a solid 2 by 2 by 2 cuboid from wooden planks."
+    },
+    {
+      "text_id": 167,
+      "sha256": "5806a6a839d0b527b8d721910c373fe570f3eb5ee3b4d911de8a305c7fb51de7",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: stone bricks, layer 2 from bottom: dirt."
+    },
+    {
+      "text_id": 168,
+      "sha256": "5865ac787472dfd99a9c34a4f1aeff5f75338905661940d7608e37bf7ccf4fc0",
+      "text": "Build a solid 2 by 2 by 3 cuboid from sea lanterns."
+    },
+    {
+      "text_id": 169,
+      "sha256": "59657570a241d0ffe565d66a51a1b584734cf3c4f3554f398d011ddc9880c35b",
+      "text": "Build a solid 2 by 2 by 3 cuboid from bricks."
+    },
+    {
+      "text_id": 170,
+      "sha256": "59bbe26963b8b04a8687c4a11005ffe44ef9b0ee7ea724cce491f2db08a05bbc",
+      "text": "Build a solid 2 by 3 by 3 cuboid from dirt."
+    },
+    {
+      "text_id": 171,
+      "sha256": "5ac687c2248d5ed4766e598b9a0f9881943dea3d130eb41b80ad38c91fd1639b",
+      "text": "Repair the 5-block gap in the wall with stone bricks."
+    },
+    {
+      "text_id": 172,
+      "sha256": "5cec9cbc714791377860c087d485b6143ca43a3fcbae588cb64318b6a53bccaa",
+      "text": "Place a 3-block line using glass."
+    },
+    {
+      "text_id": 173,
+      "sha256": "5d0288ba00257f6fcb4ed024bae222d190ee0df1c42c282ab4894bbdbd299296",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: stone bricks, layer 2 from bottom: cobblestone."
+    },
+    {
+      "text_id": 174,
+      "sha256": "5d3d2aebfc6848f64aadec2fd64d4aaa3b444fd92416aa3db1ad20990eb13e2f",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: wooden planks, layer 2 from bottom: tree trunks."
+    },
+    {
+      "text_id": 175,
+      "sha256": "5f1164bc85b0f006783643a25fead1f29d0e4401995b2e57e34295e744a44a74",
+      "text": "Build a solid 3 by 3 by 3 cuboid from glass."
+    },
+    {
+      "text_id": 176,
+      "sha256": "6015aa0dda6ebf6e2abce578d48b4089480019183b6eb1fa81c4a720256d2777",
+      "text": "Lay a 4 by 4 floor using cobblestone."
+    },
+    {
+      "text_id": 177,
+      "sha256": "60ada89e2deea9fa99b10dbef8871688c94a0081d7a0921dd00e20b66473f78b",
+      "text": "Fill the 3 by 2 hole with cobblestone."
+    },
+    {
+      "text_id": 178,
+      "sha256": "610ee2b312e122e1b504130c05b0ef2ca0430ae90767505b5e964f76f6b2f878",
+      "text": "Lay a 4 by 3 floor using wooden planks."
+    },
+    {
+      "text_id": 179,
+      "sha256": "61517b29dad6f1b590e288def6924225072c5010e1f1426846e3a334cdb69992",
+      "text": "Build a 4-wide, 3-high wall from sea lanterns."
+    },
+    {
+      "text_id": 180,
+      "sha256": "6195ac311261bc2997f289e375018130aaa251a3da5f54a5e422eaed7c8bcb11",
+      "text": "Build a solid 2 by 2 by 3 cuboid from stone bricks."
+    },
+    {
+      "text_id": 181,
+      "sha256": "61a26fd08d0099d8dc47f2cf4b5cab973023569647ca6c904a479c7f66272096",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: dirt, layer 2 from bottom: tree trunks."
+    },
+    {
+      "text_id": 182,
+      "sha256": "629f1c26344d20aff53d52dc62710404ace430a5d7a11613ffcb3381a99272d3",
+      "text": "Build a 3-wide, 2-high wall from dirt."
+    },
+    {
+      "text_id": 183,
+      "sha256": "62a32d4671237f17f98e02508a7cd7e5f8dffadb2acc9401e3a6a75823e62f60",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: dirt, layer 2 from bottom: dirt."
+    },
+    {
+      "text_id": 184,
+      "sha256": "62cdca46a8c17d271395cc2090a6e7d770c31e6ad5a6764cac25c494ee40f043",
+      "text": "Build a solid 2 by 3 by 3 cuboid from glass."
+    },
+    {
+      "text_id": 185,
+      "sha256": "62e5b41c8630a9377b1e1ad1a4b443402b7fe4d4738c7c3a1159c361c15ac0f7",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: bricks, layer 2 from bottom: bricks."
+    },
+    {
+      "text_id": 186,
+      "sha256": "63179a5fc6e2b07e3d60457696831e98f3d0e68d86e65048d5727a0016516580",
+      "text": "Build a 5-wide, 3-high wall using sea lanterns, then open a doorway in its center."
+    },
+    {
+      "text_id": 187,
+      "sha256": "63f0c554925e5d5106c430eaa14add49618590195b61a85e6a7d003122b94cb8",
+      "text": "Build a 3-wide, 2-high wall using cobblestone, then open a doorway in its center."
+    },
+    {
+      "text_id": 188,
+      "sha256": "64472b48c60dfae10918648c060a01194c04b578ee5882ff522c4c514843c777",
+      "text": "Place a 3-block line using wooden planks."
+    },
+    {
+      "text_id": 189,
+      "sha256": "645987032589151ebdae0bd2c926ed077bb2a03f84cbc0c24ef354770e35c679",
+      "text": "Fill the 4 by 2 hole with wooden planks."
+    },
+    {
+      "text_id": 190,
+      "sha256": "64b9a6fb3098630323119641989635ad2cbad3539392cc949a3317e403228896",
+      "text": "Place a 5-block line using dirt."
+    },
+    {
+      "text_id": 191,
+      "sha256": "653cd967857ec9d063a8ff4541bce16652198599fe96ebaa3924d443964217d7",
+      "text": "Build a 5-wide, 3-high wall from sea lanterns."
+    },
+    {
+      "text_id": 192,
+      "sha256": "663ba3c807d439d0e587536953700602fab5019bb04e0ae5762127b42299f771",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: sea lanterns, layer 2 from bottom: sea lanterns."
+    },
+    {
+      "text_id": 193,
+      "sha256": "6680a9f4b6dcd6bab7b9b10a85726ab8f07b19edac71a6093172b16f3964c99f",
+      "text": "Build a 3-wide, 3-high wall from wooden planks."
+    },
+    {
+      "text_id": 194,
+      "sha256": "6733306ba427f56fec8105a653c223513193cd29d4219412d89abd25d7109599",
+      "text": "Repair the 5-block gap in the wall with cobblestone."
+    },
+    {
+      "text_id": 195,
+      "sha256": "678b1e175c6e559abe43486bfa2d8dde947648d8a13512ca590ff92a1df272b2",
+      "text": "Fill the 4 by 4 hole with dirt."
+    },
+    {
+      "text_id": 196,
+      "sha256": "6853087dd58925c4fc74986ef16d5b3ad437e4af73633e34569a99347f2e1d63",
+      "text": "Build a solid 2 by 2 by 2 cuboid from dirt."
+    },
+    {
+      "text_id": 197,
+      "sha256": "69168ef8e99ed14995ab8e91aecf5c35ecd0cb1caaf7dcbb60002fc28051cb0b",
+      "text": "Lay a 2 by 3 floor using glass."
+    },
+    {
+      "text_id": 198,
+      "sha256": "6928c3f85bd2594a5963b0b213f8551145490a24a949cec85d5328dbab16f5d3",
+      "text": "Fill the 2 by 3 hole with cobblestone."
+    },
+    {
+      "text_id": 199,
+      "sha256": "699517593f7a7acc9ce96ce0c5944cc9790b372b5bc5d7e81aefc0b77c3060d8",
+      "text": "Build a 3-wide, 2-high wall using sea lanterns, then open a doorway in its center."
+    },
+    {
+      "text_id": 200,
+      "sha256": "6a1e4d1f4f74532fca5b889eecb30c804b2f8fd5284f10dad384d694b0cf4cdf",
+      "text": "Fill the 3 by 3 hole with cobblestone."
+    },
+    {
+      "text_id": 201,
+      "sha256": "6a40cd4a1ea064677014cc7de96bc89eae22657bcc61e9f63139b3d43f824b76",
+      "text": "Place a 5-block line using bricks."
+    },
+    {
+      "text_id": 202,
+      "sha256": "6aff3d14ff92ab6c23b3e7ac8b4886573100117b26d59a523764e81b06389f17",
+      "text": "Fill the 3 by 2 hole with stone bricks."
+    },
+    {
+      "text_id": 203,
+      "sha256": "6bc20be6224485aaf77242666cb3337fde6b6759f889d8294f460961b2fa0d5f",
+      "text": "Lay a 2 by 3 floor using sea lanterns."
+    },
+    {
+      "text_id": 204,
+      "sha256": "6cbd5ce77ba545650477449d3adce7d92dd6eea9d5af14df566dfaf113738982",
+      "text": "Collect the three marked resource types from the shared area."
+    },
+    {
+      "text_id": 205,
+      "sha256": "6d30b2a16bc96678916c7e4a7388fe06c33dcbc064622ea85d3629ca438e5df2",
+      "text": "Lay a 3 by 3 floor using sea lanterns."
+    },
+    {
+      "text_id": 206,
+      "sha256": "6e7f8a9cf714950b688849da84598c6b1ab7a484e73bbf81046c6934c2806498",
+      "text": "Build a solid 2 by 3 by 2 cuboid from sea lanterns."
+    },
+    {
+      "text_id": 207,
+      "sha256": "6ec2a4bafe4d185eccd2e09d345f402fc6da8187bc8bedf561ec71e83f860537",
+      "text": "Build a 3-wide, 2-high wall from sea lanterns."
+    },
+    {
+      "text_id": 208,
+      "sha256": "6f83591f2170d285da8dd316ba14ba2691a38f9623e462b71926080618d18d9a",
+      "text": "Lay a 4 by 2 floor using wooden planks."
+    },
+    {
+      "text_id": 209,
+      "sha256": "6fc593b786b25f66d7c4c713e2c8b83daaed4138c06539a2b994bac0f6cf1619",
+      "text": "Lay a 4 by 2 floor using sea lanterns."
+    },
+    {
+      "text_id": 210,
+      "sha256": "6fd0b28326fadd4486d59d4eccc56d2d8e8b919dbeeead7eae2e1b4c799f586f",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: cobblestone, layer 2 from bottom: sea lanterns."
+    },
+    {
+      "text_id": 211,
+      "sha256": "704a96ecd4dc3f0f99ee36a2453a581bfb05009f1ec6925b3eefd5d39cca585a",
+      "text": "Fill the 2 by 2 hole with stone bricks."
+    },
+    {
+      "text_id": 212,
+      "sha256": "709eb61b9f106a54960ca121bb390ec5a7739c887602d01b495f9b3d373900c0",
+      "text": "Place a 3-block line using dirt."
+    },
+    {
+      "text_id": 213,
+      "sha256": "7145ecb0b35f2ae2659309687604458ea3ea17569f80b1f7b06a73523a4b1dbf",
+      "text": "Build a 6-wide, 2-high wall from glass."
+    },
+    {
+      "text_id": 214,
+      "sha256": "71625afa7f510350817aee516fe7038a59ae031f062a53b881be66f0ca7b7ad4",
+      "text": "Build a 3-wide, 2-high wall from stone bricks."
+    },
+    {
+      "text_id": 215,
+      "sha256": "71bed4ccd80aa0fedc2dbaa0c7e19c6b24e6505a479cc8a2de7f7cc1b8fb8d3e",
+      "text": "Lay a 3 by 3 floor using stone bricks."
+    },
+    {
+      "text_id": 216,
+      "sha256": "723fccc9d2a980f50da06118ae183ec0c7e9726901eb5327ec2ea9dde2f3b98c",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: stone bricks, layer 2 from bottom: stone bricks."
+    },
+    {
+      "text_id": 217,
+      "sha256": "727ffe2f9e79b42869b162fbf0ac9d94aefbea5e00cf0fb46d512e653fedd9cc",
+      "text": "Repair the 2-block gap in the wall with dirt."
+    },
+    {
+      "text_id": 218,
+      "sha256": "731689160007af0a88d7ef1f2e385a4474eb86a9f66e21a088188defd781fd41",
+      "text": "Lay a 3 by 4 floor using cobblestone."
+    },
+    {
+      "text_id": 219,
+      "sha256": "742fd14742a51e1445747f1d6b3dc99421092b3ce5d94f1d0e609ed456a36e39",
+      "text": "Build a solid 4 by 2 by 2 cuboid from glass."
+    },
+    {
+      "text_id": 220,
+      "sha256": "74a1303b1fa12bbbe8b0797a8eb3a865fcece4f158eab8de13b125e45c2a6992",
+      "text": "Build a solid 3 by 3 by 3 cuboid from sea lanterns."
+    },
+    {
+      "text_id": 221,
+      "sha256": "74c1878f86e17d31d7c82bb10770272930790ca4b93d3970e7c877fe87a474bb",
+      "text": "Build a 4-wide, 2-high wall from cobblestone."
+    },
+    {
+      "text_id": 222,
+      "sha256": "752fc9358cb431d7918a41019b28efda1d7320ad419469476a6cbb56f7a40542",
+      "text": "Build a solid 2 by 1 by 3 cuboid from glass."
+    },
+    {
+      "text_id": 223,
+      "sha256": "761bdf121004ab80b3630e8b1f725ee9236fa2254c540cef8870f7f76870985e",
+      "text": "Build a 3-wide, 2-high wall using wooden planks, then open a doorway in its center."
+    },
+    {
+      "text_id": 224,
+      "sha256": "7645a634d1c10875ffa545328b7243e135c2490aa7d59eee97461adb974dc7f6",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: tree trunks, layer 2 from bottom: glass."
+    },
+    {
+      "text_id": 225,
+      "sha256": "765c991879d3a8ed84abc6a1a835e452b6ccf267bfce8200c8d9a4317af4a68c",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: sea lanterns, layer 2 from bottom: wooden planks."
+    },
+    {
+      "text_id": 226,
+      "sha256": "76af7567a607259c9dab6d1170371d19be4e3795289151ac095a53673a1fd202",
+      "text": "Build a solid 2 by 3 by 2 cuboid from cobblestone."
+    },
+    {
+      "text_id": 227,
+      "sha256": "773d1b20a97cf9d523c8c1766ceb12a4ee736e2a2f631e873d94bdfff371825c",
+      "text": "Build a solid 2 by 1 by 2 cuboid from cobblestone."
+    },
+    {
+      "text_id": 228,
+      "sha256": "77697ae8439c98ba53f2f4605e80e14628358437975cc9d5fb48002039b7ab1c",
+      "text": "Build a solid 3 by 1 by 2 cuboid from wooden planks."
+    },
+    {
+      "text_id": 229,
+      "sha256": "77cd2abe2a50e7df01ab6bf9da28d8738fdfdf52bf849ec6be7959b5ddd0915d",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: cobblestone, layer 2 from bottom: stone bricks."
+    },
+    {
+      "text_id": 230,
+      "sha256": "78a4fda7e4c35090b403aea3ac3d13a5762738df22096d2a7a839a290df98e6f",
+      "text": "Build a solid 4 by 1 by 3 cuboid from bricks."
+    },
+    {
+      "text_id": 231,
+      "sha256": "78b9ff8d1f83cf1f820bc2ff48d580361d7eaa73f6f62ed3659408c86147da15",
+      "text": "Build a solid 4 by 1 by 3 cuboid from dirt."
+    },
+    {
+      "text_id": 232,
+      "sha256": "78ca009725baca10ff7dddf7c6b46834554655360b66860b9a1d831626b9f428",
+      "text": "Repair the 2-block gap in the wall with stone bricks."
+    },
+    {
+      "text_id": 233,
+      "sha256": "795289e22927adcac0950de015830dfb207008a57a9a7e6110e912c53748a260",
+      "text": "Dig a 1-layer rectangular pit, then refill it with layer 1 from bottom: stone bricks."
+    },
+    {
+      "text_id": 234,
+      "sha256": "7a67de49f5b07687094bad768c365b6643bb0ffc5f5afb01792389695d2ff024",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: sea lanterns, layer 2 from bottom: tree trunks."
+    },
+    {
+      "text_id": 235,
+      "sha256": "7a6f17897fc1aff9deb17c81c295b65aa629cc090177734d31e6c9b158e75cef",
+      "text": "Build a solid 2 by 3 by 2 cuboid from bricks."
+    },
+    {
+      "text_id": 236,
+      "sha256": "7adc3b762aeb04f63218cf5fd5fa0c436bb0e6a9cc83794163d377f99fe9acfa",
+      "text": "Place a 2-block line using bricks."
+    },
+    {
+      "text_id": 237,
+      "sha256": "7af09a080b27028c085098a148db563db88de91dbfd2a78b6183bb893e8aa87e",
+      "text": "Fill the 3 by 4 hole with wooden planks."
+    },
+    {
+      "text_id": 238,
+      "sha256": "7afff88e623a65cb82d3c40c5eb982684e5d1e1777db61a1d73f54f309669142",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: tree trunks, layer 2 from bottom: bricks."
+    },
+    {
+      "text_id": 239,
+      "sha256": "7b36f2fdf87fe15d95a8b1cc5a6730019c848bca6043477e42c7bc82034617ef",
+      "text": "Lay a 2 by 4 floor using dirt."
+    },
+    {
+      "text_id": 240,
+      "sha256": "7c04a3487f88875c19a9be8ee4ac9a5b4070c1b2cb19ff801a7d72a4ed80a295",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: bricks, layer 2 from bottom: wooden planks."
+    },
+    {
+      "text_id": 241,
+      "sha256": "7cc50e2292fbfb43a616e901a523a8d62c2c46629c2ead9e5d0335bea8cebad3",
+      "text": "Build a solid 4 by 1 by 2 cuboid from wooden planks."
+    },
+    {
+      "text_id": 242,
+      "sha256": "7d5d6340ebfd9a6294343a0cd868d08b90dc553ba3bc09144fd59114fed9f3fd",
+      "text": "Build a solid 2 by 3 by 2 cuboid from dirt."
+    },
+    {
+      "text_id": 243,
+      "sha256": "7ebacd6bc6ec744a2aff4e75a388dadbb7e18f5567d68d7e40f57ea5cf76b7e8",
+      "text": "Fill the 2 by 4 hole with cobblestone."
+    },
+    {
+      "text_id": 244,
+      "sha256": "7ef2d7556b2be0ea8e5a01c407214de00457a62cdf0098836d640bc9b387b539",
+      "text": "Build a 6-wide, 3-high wall from cobblestone."
+    },
+    {
+      "text_id": 245,
+      "sha256": "82aeaa8c85510a83a64dffae213f907edd2c2ea84bc990e99eb22dedc3ae5c1c",
+      "text": "Fill the 2 by 3 hole with bricks."
+    },
+    {
+      "text_id": 246,
+      "sha256": "838c64191e1aab98467c2e867ef2d6d200924da528cc95236d074e23c60adbe6",
+      "text": "Lay a 3 by 2 floor using sea lanterns."
+    },
+    {
+      "text_id": 247,
+      "sha256": "83f9069b70578a78af1bcb4ee02ee75930e32458b20386a1ff20db57f98d07be",
+      "text": "Fill the 3 by 2 hole with bricks."
+    },
+    {
+      "text_id": 248,
+      "sha256": "859d645c713df81201c6910554338eb5758d291e3a49a477de286ba70e09ced6",
+      "text": "Build a 3-wide, 3-high wall using cobblestone, then open a doorway in its center."
+    },
+    {
+      "text_id": 249,
+      "sha256": "85e1ec18b887f25fe089581a0ee31e79186f4a44d5be7e663961a63bd49858c7",
+      "text": "Fill the 3 by 4 hole with dirt."
+    },
+    {
+      "text_id": 250,
+      "sha256": "867de62159955c91578ae28cbf862262abe6d6f3af22380481d6bea3a56614f6",
+      "text": "Build a 6-wide, 3-high wall from stone bricks."
+    },
+    {
+      "text_id": 251,
+      "sha256": "86da52120d85ea6ab89c0e2f734a97ad09c5776857cf882baed0d1f05811c8bb",
+      "text": "Build a solid 2 by 2 by 2 cuboid from bricks."
+    },
+    {
+      "text_id": 252,
+      "sha256": "88169de4f43b7bba710571abacde26fb3707a92d6caffc2ac455c10489dfd37a",
+      "text": "Build a solid 2 by 2 by 2 cuboid from stone bricks."
+    },
+    {
+      "text_id": 253,
+      "sha256": "881879f85cc4a9407c8da25786501198262ef3ec460b4933a915257bdac0c713",
+      "text": "Fill the 4 by 2 hole with sea lanterns."
+    },
+    {
+      "text_id": 254,
+      "sha256": "8871038bae59f3daed24531a88bc53ec218989030f52bc8992c5b85d6b4aa4e1",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: bricks, layer 2 from bottom: dirt."
+    },
+    {
+      "text_id": 255,
+      "sha256": "88d27cc7bfaaf63008ed3ba6da41c6a7361522e257c578b20a04418f5d5f1eee",
+      "text": "Build a solid 2 by 3 by 2 cuboid from wooden planks."
+    },
+    {
+      "text_id": 256,
+      "sha256": "88e4ab47229b97ae76715a3552e195b82d76b1648955de04c283f0497618ef6d",
+      "text": "Build a solid 2 by 1 by 3 cuboid from cobblestone."
+    },
+    {
+      "text_id": 257,
+      "sha256": "891bceb7cabe7d5003a51d46960dc357b47552552e2d115830bf0651a28b9950",
+      "text": "Lay a 2 by 3 floor using cobblestone."
+    },
+    {
+      "text_id": 258,
+      "sha256": "89a8f17321fed91d1996769a6aac249da086a30bb771cfde1d511e34334fec8c",
+      "text": "Repair the 3-block gap in the wall with glass."
+    },
+    {
+      "text_id": 259,
+      "sha256": "89c937743301a37243be4dcf96b1fe4e87efd5119350d84e2af3fd6c84e92257",
+      "text": "Build a solid 4 by 3 by 3 cuboid from wooden planks."
+    },
+    {
+      "text_id": 260,
+      "sha256": "89d3afea6e0f2012df49f163c241b8561f76a12beaf8dd5c393847043e2754f7",
+      "text": "Build a solid 4 by 2 by 3 cuboid from sea lanterns."
+    },
+    {
+      "text_id": 261,
+      "sha256": "89ed48bb21ef9e97a58f3e3e357c189f59ad68774d6d714fca0bc0122042735b",
+      "text": "Repair the 5-block gap in the wall with sea lanterns."
+    },
+    {
+      "text_id": 262,
+      "sha256": "8a9871838aff7e7796336e3fcd28072c135c728dfdfc56019bc54d944dc4040d",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: cobblestone, layer 2 from bottom: cobblestone."
+    },
+    {
+      "text_id": 263,
+      "sha256": "8b686a646c45c4a065c63e99d07460b0c8c72de46bd7924a9e1b0187c44f9623",
+      "text": "Build a 3-wide, 3-high wall using stone bricks, then open a doorway in its center."
+    },
+    {
+      "text_id": 264,
+      "sha256": "8c06bd01205d037d3293055e8279952cc6219c0c7676a8f614230c53a8cb9b0b",
+      "text": "Build a solid 3 by 1 by 2 cuboid from cobblestone."
+    },
+    {
+      "text_id": 265,
+      "sha256": "8c991bc4175dd1e9886fbe2ff0bcacf7990b17324ef47b81d4fe9d4c452488d9",
+      "text": "Repair the 4-block gap in the wall with glass."
+    },
+    {
+      "text_id": 266,
+      "sha256": "8cbd284aaf58825c96be947af3426cf72e5caaf10917e239ba83e790fa732638",
+      "text": "Fill the 3 by 3 hole with bricks."
+    },
+    {
+      "text_id": 267,
+      "sha256": "8d0bd710a8d9e09460eacaa468a62a3c24e3be28f74a3ff5b8ea97a34bd122fd",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: stone bricks, layer 2 from bottom: tree trunks."
+    },
+    {
+      "text_id": 268,
+      "sha256": "8e1b7a0591cb9ba224201d1fa5a77c9d05d0474d72997f40ffda7e5bb4592fb8",
+      "text": "Build a solid 3 by 3 by 2 cuboid from dirt."
+    },
+    {
+      "text_id": 269,
+      "sha256": "8ea35ba636badf505db252bb8916059a8f02ee6bae33b1cb237b8d0f61372a40",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: sea lanterns, layer 2 from bottom: cobblestone."
+    },
+    {
+      "text_id": 270,
+      "sha256": "8f344af6e47bacbd7b873ec3b56e29aad1e1597a2ea28f49d6908dfb5aba71e6",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: tree trunks, layer 2 from bottom: dirt."
+    },
+    {
+      "text_id": 271,
+      "sha256": "8f66832fbb7afbcb9a4a43cd3bf5cd749a1eae21d7f1e60dc6ebaa6facadb06b",
+      "text": "Build a 4-wide, 3-high wall from dirt."
+    },
+    {
+      "text_id": 272,
+      "sha256": "8f6c0d741fd7fe779551fda1f3ac30899da4e4fd832cd3a3c5269de5f019c95b",
+      "text": "Lay a 4 by 3 floor using bricks."
+    },
+    {
+      "text_id": 273,
+      "sha256": "910a7934e9d00a8ece954707e3aeb8b94080eb25887506875526110869921cd7",
+      "text": "Build a 4-wide, 3-high wall from glass."
+    },
+    {
+      "text_id": 274,
+      "sha256": "9197640e70a6ca4ef9f18fe3cd475337e107da6475af9e7e3aef19afdd7e38d0",
+      "text": "Place a 4-block line using stone bricks."
+    },
+    {
+      "text_id": 275,
+      "sha256": "91b0f6d1a6a6206265bac75c411a224abfefe3d7597e423848148396277201e4",
+      "text": "Fill the 2 by 2 hole with dirt."
+    },
+    {
+      "text_id": 276,
+      "sha256": "91baedaf195f8a0cfd6605fdf3de1e649def1485d4ac524cbeb57eb1a3e3192c",
+      "text": "Build a solid 3 by 2 by 3 cuboid from dirt."
+    },
+    {
+      "text_id": 277,
+      "sha256": "92817b603b70c08497655e0ded9b88f5dfa2448294bbfd470df3498b8cb5e0be",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: wooden planks, layer 2 from bottom: bricks."
+    },
+    {
+      "text_id": 278,
+      "sha256": "92ae8d93dcfedc53353c9e162d756dda72212d808f90da11ffe7952808a4193e",
+      "text": "Fill the 4 by 2 hole with stone bricks."
+    },
+    {
+      "text_id": 279,
+      "sha256": "93009c98210072172c5d0655471f1c6e2cafe5a4d8fe1843a6f64d0d7f798baa",
+      "text": "Build a 4-wide, 3-high wall from bricks."
+    },
+    {
+      "text_id": 280,
+      "sha256": "93745698afa074698ccad5b5b5727c7a32d3b4a6860f827374abcb5ac07b972e",
+      "text": "Build a solid 3 by 2 by 3 cuboid from glass."
+    },
+    {
+      "text_id": 281,
+      "sha256": "937cb179c1179b3366d12bf3a146df49105a91dfe8077416a863d0344c3f60ae",
+      "text": "Fill the 2 by 3 hole with stone bricks."
+    },
+    {
+      "text_id": 282,
+      "sha256": "93e0100d01d2f40661c9539f2ed47e991e65a5401a4a3e183f4377de51f0a732",
+      "text": "Build a solid 4 by 1 by 3 cuboid from sea lanterns."
+    },
+    {
+      "text_id": 283,
+      "sha256": "95bb552c15f523a1f1334624a53600518d686f818137f6d8946af96ed2fef1f2",
+      "text": "Build a solid 4 by 2 by 2 cuboid from bricks."
+    },
+    {
+      "text_id": 284,
+      "sha256": "97cf461bfbfbb256c09dffdf0a255cc6bfe44cec0b406ccf5ab8b31b4580c30b",
+      "text": "Build a 3-wide, 3-high wall using bricks, then open a doorway in its center."
+    },
+    {
+      "text_id": 285,
+      "sha256": "98f565db6ece3a6e10487887db8a7492f2d145de0167167da8849bc72348aec5",
+      "text": "Place a 2-block line using wooden planks."
+    },
+    {
+      "text_id": 286,
+      "sha256": "9927085fea64b1c6ff5f21c083c870028e04ab7263f4c455a882de74049c78c8",
+      "text": "Lay a 4 by 4 floor using bricks."
+    },
+    {
+      "text_id": 287,
+      "sha256": "9a7a073d83d3c658fe18dd67efe061f01a6da14eec7d1a29e4114399b8f6c30c",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: glass, layer 2 from bottom: cobblestone."
+    },
+    {
+      "text_id": 288,
+      "sha256": "9b3d5fae45950c902fc8081d037304f204dd1a6f06d12b9bb0b87b84928234ac",
+      "text": "Build a solid 3 by 1 by 3 cuboid from wooden planks."
+    },
+    {
+      "text_id": 289,
+      "sha256": "9b53d2bd79b1af00c9b809002113a336a3b3d5d6b36f0f08dccadd66854a50f4",
+      "text": "Place a 3-block line using stone bricks."
+    },
+    {
+      "text_id": 290,
+      "sha256": "9ce425b28800fb087fff8da22c5aa0067ed7d4dc5d56fb35368e8f637d01d274",
+      "text": "Build a 5-wide, 2-high wall using cobblestone, then open a doorway in its center."
+    },
+    {
+      "text_id": 291,
+      "sha256": "9d1063e8480ff4e97f34df958086f44c274f8f6e0ae4d3cc7d29ae9d34ca0245",
+      "text": "Build a solid 3 by 3 by 3 cuboid from stone bricks."
+    },
+    {
+      "text_id": 292,
+      "sha256": "9dbbe84b026644b7acc8d75d6c495b6871481a2fdbc815837bb8970adce25edd",
+      "text": "Build a 3-wide, 3-high wall using wooden planks, then open a doorway in its center."
+    },
+    {
+      "text_id": 293,
+      "sha256": "9e7d72aa1484f6c2b848abfef08a8fd9d1906193369c59d8737bca9c7dc447a7",
+      "text": "Fill the 3 by 3 hole with wooden planks."
+    },
+    {
+      "text_id": 294,
+      "sha256": "9faf8512577661ae949cab8ad460e2b82da90b0957b91e3b7306b331c9607dcc",
+      "text": "Lay a 2 by 3 floor using stone bricks."
+    },
+    {
+      "text_id": 295,
+      "sha256": "a10dd270728dcfeb81903336f72dd634b265aa3c53afb776c7541a4b3b26bbca",
+      "text": "Build a solid 2 by 1 by 3 cuboid from sea lanterns."
+    },
+    {
+      "text_id": 296,
+      "sha256": "a14db094fa53265e1cecd77f05ad86e3ea06df171246a944c6a9e8c4d2c45eb6",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: cobblestone, layer 2 from bottom: glass."
+    },
+    {
+      "text_id": 297,
+      "sha256": "a1ab02600750012d6fae37642461e3c272f9afa24afeafb06edfdf4efeded4d3",
+      "text": "Build a solid 4 by 3 by 2 cuboid from stone bricks."
+    },
+    {
+      "text_id": 298,
+      "sha256": "a1bc3ea54dc20b0ec4bf2775e526b6be77227fafa83a7569bcae7e9adbca8ad4",
+      "text": "Build a solid 3 by 3 by 2 cuboid from glass."
+    },
+    {
+      "text_id": 299,
+      "sha256": "a23364777a2783d70e995612e2d540e754cffabf345eb5de821cc977c458c55f",
+      "text": "Build a solid 4 by 3 by 2 cuboid from sea lanterns."
+    },
+    {
+      "text_id": 300,
+      "sha256": "a29c18c285cfee4c170cf6097974ffa2476ab86616fa9992d055b79f72eea30f",
+      "text": "Build a 4-wide, 2-high wall from sea lanterns."
+    },
+    {
+      "text_id": 301,
+      "sha256": "a3a116f76d17c8bda8c1a30a1c49d5a4715d3e1232d73fc53106f3d46dc84cfe",
+      "text": "Build a 6-wide, 2-high wall from sea lanterns."
+    },
+    {
+      "text_id": 302,
+      "sha256": "a4970648ddb2f6f7cc48fd3fcdcd6e2aed4d6209e1c9e358fd4fb4b9a53f495a",
+      "text": "Fill the 2 by 3 hole with sea lanterns."
+    },
+    {
+      "text_id": 303,
+      "sha256": "a6080585de60e210e974d4a00a47a5ece9a9ae544762be3be9c2f83e8be4e2f6",
+      "text": "Build a solid 2 by 1 by 2 cuboid from sea lanterns."
+    },
+    {
+      "text_id": 304,
+      "sha256": "a631350199ed7860a622792ff668770b2188dabbca9c53b496faad94b7d54418",
+      "text": "Build a solid 3 by 2 by 2 cuboid from dirt."
+    },
+    {
+      "text_id": 305,
+      "sha256": "a6ec54937eeeecc232b157af5a2546d3cbd7d5cfa367570f2e9616a67c633eb1",
+      "text": "Lay a 3 by 4 floor using dirt."
+    },
+    {
+      "text_id": 306,
+      "sha256": "a7b140fd9b100fca780f1cccb848bf5df1d976ffd824b1499e6a22b9b2d80161",
+      "text": "Build a solid 2 by 3 by 3 cuboid from wooden planks."
+    },
+    {
+      "text_id": 307,
+      "sha256": "a7da034ac4b1357826113d1a4a159c30f752087a94354b5a7e1a312924fbb599",
+      "text": "Lay a 4 by 4 floor using wooden planks."
+    },
+    {
+      "text_id": 308,
+      "sha256": "a7f83ad1780886198609942e59fb3c2d00234e3f7349dadb948739c01a8be5fd",
+      "text": "Lay a 3 by 4 floor using glass."
+    },
+    {
+      "text_id": 309,
+      "sha256": "a86878ac1baa77aa17af7a775a6772dd866d969ae96b56fca91793218669600c",
+      "text": "Build a solid 2 by 1 by 2 cuboid from wooden planks."
+    },
+    {
+      "text_id": 310,
+      "sha256": "a8e2ef0c2e1487fccdb8b14278f71a29a6753e40a6ef0f757c500d6402db1408",
+      "text": "Repair the 5-block gap in the wall with dirt."
+    },
+    {
+      "text_id": 311,
+      "sha256": "a924d71f2fb35dd2a43428daa48f19b5c1a8ca21b8df5446a141a4152363c06a",
+      "text": "Build a solid 2 by 3 by 2 cuboid from stone bricks."
+    },
+    {
+      "text_id": 312,
+      "sha256": "aa34212dc77930ca902444b6e6377dafd2c0374b11526019d7b7cf0a5acc4fe9",
+      "text": "Build a 3-wide, 2-high wall using bricks, then open a doorway in its center."
+    },
+    {
+      "text_id": 313,
+      "sha256": "aa3a753c95b6b0859a8c6043b1c9e47b015387070e4a5c7154be1f7b5b7b0fbb",
+      "text": "Dig a 3 by 3 hole in front of you."
+    },
+    {
+      "text_id": 314,
+      "sha256": "aa938bebc65d6fbbb4ab94d5d9aeedc183c7dcaeb211be9f635ebbf48c19d0e3",
+      "text": "Build a 5-wide, 2-high wall from stone bricks."
+    },
+    {
+      "text_id": 315,
+      "sha256": "aaa477715a0a5b1232619f242a778b47d23588e40d33f737b3d51142b4bf4259",
+      "text": "Fill the 3 by 4 hole with bricks."
+    },
+    {
+      "text_id": 316,
+      "sha256": "ab963f26e68a6fbabe9567dc47dc9934d11a0d447f0de47885ef908268dfe548",
+      "text": "Lay a 2 by 3 floor using bricks."
+    },
+    {
+      "text_id": 317,
+      "sha256": "ac9d33bca4fbdb7191c778cdba49f009c7def52937e0bf64367f0741eba1cc15",
+      "text": "Build a 5-wide, 2-high wall using bricks, then open a doorway in its center."
+    },
+    {
+      "text_id": 318,
+      "sha256": "acc786d84aecf0526848df53af60dc75f9f51aa567a26d7ef7a82c0d5d4949bc",
+      "text": "Fill the 3 by 3 hole with stone bricks."
+    },
+    {
+      "text_id": 319,
+      "sha256": "acc9926b59630be58e7744a7c5d2668318c443831043f2045341c41832807b02",
+      "text": "Build a 5-wide, 3-high wall using glass, then open a doorway in its center."
+    },
+    {
+      "text_id": 320,
+      "sha256": "ad75ce6285f9edaf2ab1eceb9572a3509503e26bbdd1eec30dc7596ae76e1e2f",
+      "text": "Build a solid 3 by 2 by 3 cuboid from sea lanterns."
+    },
+    {
+      "text_id": 321,
+      "sha256": "adf39dadec8e54cea5b50dea99e05ed9a68c120364979d9617f42b05cce2e75a",
+      "text": "Build a 5-wide, 3-high wall from stone bricks."
+    },
+    {
+      "text_id": 322,
+      "sha256": "af563cbf71d6e67d9ce54520b6287fbaf38e1340f86a9db4d62f22a696966d17",
+      "text": "Fill the 3 by 3 hole with glass."
+    },
+    {
+      "text_id": 323,
+      "sha256": "afbd4738c08369fc67899d74d311aeb211ce9c4b6a9d62157bb210e0b9100f58",
+      "text": "Dig a 2 by 4 hole in front of you."
+    },
+    {
+      "text_id": 324,
+      "sha256": "affed7e432c3453ecc36c4eb416a926cbe98135bfa66a7337ce7da0500e22f7b",
+      "text": "Fill the 3 by 4 hole with glass."
+    },
+    {
+      "text_id": 325,
+      "sha256": "b00a0cefe8e86d0a116210a58f36b7c04cd80ba13cd862df9815e7dfcad3f09c",
+      "text": "Build a 6-wide, 3-high wall from glass."
+    },
+    {
+      "text_id": 326,
+      "sha256": "b03fcf96f357264672c0c9489994db1285d4343040cafba5675bd2ef0fe840c1",
+      "text": "Build a 6-wide, 3-high wall from sea lanterns."
+    },
+    {
+      "text_id": 327,
+      "sha256": "b04496ad4ac9b503c8fb7fec584a8fdbc8d734d52b94e362487fea8f25bf4a62",
+      "text": "Build a solid 4 by 1 by 3 cuboid from glass."
+    },
+    {
+      "text_id": 328,
+      "sha256": "b08049417697e6713d027f1768781be2203226d3a6d5ab6bfdc0c4419cae40c6",
+      "text": "Place a 5-block line using glass."
+    },
+    {
+      "text_id": 329,
+      "sha256": "b13c46e046a955287a86186e0a6c3c8b39c7c5e5f8c596f32304d620cdbef68e",
+      "text": "Build a solid 4 by 3 by 2 cuboid from dirt."
+    },
+    {
+      "text_id": 330,
+      "sha256": "b2d7fb202d053e66aae6bc0dea890a6da9b12da669673b148cedd71506f1412d",
+      "text": "Build a solid 2 by 2 by 3 cuboid from cobblestone."
+    },
+    {
+      "text_id": 331,
+      "sha256": "b35c3c2c59268c28d59cc5e3dc1772de236fe6cd3c70434c89e43e49008620db",
+      "text": "Lay a 4 by 4 floor using sea lanterns."
+    },
+    {
+      "text_id": 332,
+      "sha256": "b417113bff1bd6e0d9e4816c701977bb6af5b8075aadefb1a066470300b2ab3e",
+      "text": "Build a solid 3 by 2 by 2 cuboid from stone bricks."
+    },
+    {
+      "text_id": 333,
+      "sha256": "b41ac46ec4240d8b08c0ea17cf18f58ecb4a61a1e8665a5c50943466c2529667",
+      "text": "Repair the 4-block gap in the wall with wooden planks."
+    },
+    {
+      "text_id": 334,
+      "sha256": "b4808b6f498834bd05e2c2679293906fd938f1318308d2c935805007b93a8d63",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: cobblestone, layer 2 from bottom: wooden planks."
+    },
+    {
+      "text_id": 335,
+      "sha256": "b541c2a3a10c0641a58c5df79ca63e82765411400172e592d8f4614a9985d186",
+      "text": "Build a 5-wide, 2-high wall from sea lanterns."
+    },
+    {
+      "text_id": 336,
+      "sha256": "b5b3ffc35ebcf481dc848530276764d9fa6a5807ac5a27188a4cca737e49b0b0",
+      "text": "Lay a 3 by 3 floor using glass."
+    },
+    {
+      "text_id": 337,
+      "sha256": "b6edd21efd155defc4b67dcde581a349bb5ac4fef31ca415a61f4a25d32503a4",
+      "text": "Build a 5-wide, 3-high wall using stone bricks, then open a doorway in its center."
+    },
+    {
+      "text_id": 338,
+      "sha256": "b75ae82e2193d719f5d9f8b7c6386fe8b7c9876281aaf19cdea96f0aba801f30",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: wooden planks, layer 2 from bottom: sea lanterns."
+    },
+    {
+      "text_id": 339,
+      "sha256": "b89d17474da80751ae5b36ba4e58d997e97d98b57c309d596154194c41176051",
+      "text": "Build a solid 2 by 1 by 3 cuboid from stone bricks."
+    },
+    {
+      "text_id": 340,
+      "sha256": "baa0571e0bca4212be0ab170d0d8d2bc3c92bbbe9814dfe555127c41b5b292a1",
+      "text": "Build a 3-wide, 2-high wall using stone bricks, then open a doorway in its center."
+    },
+    {
+      "text_id": 341,
+      "sha256": "bae8ed15efec24a1fb2de11d0b80f094e441180bdefd8e6f3149f322b69cfa8b",
+      "text": "Lay a 2 by 4 floor using sea lanterns."
+    },
+    {
+      "text_id": 342,
+      "sha256": "bb4e4e77d2db172eb731d43f6d48b30b19641a402b4a7f4d4047547c5414dade",
+      "text": "Fill the 4 by 3 hole with glass."
+    },
+    {
+      "text_id": 343,
+      "sha256": "bb91a08853fc528df1706f03b497f06557a11b73d67c2b0224378e0047cccc7d",
+      "text": "Place a 4-block line using dirt."
+    },
+    {
+      "text_id": 344,
+      "sha256": "bbccdc63ddb7b2e57379d057898e3c40ba8ce02ac2ce82aebefbe8a8fdc97283",
+      "text": "Build a 5-wide, 3-high wall from dirt."
+    },
+    {
+      "text_id": 345,
+      "sha256": "bc0cddedf7da0a344750b0a8e821297ca777da902766cd926672fdb399e28ec8",
+      "text": "Build a solid 3 by 1 by 2 cuboid from sea lanterns."
+    },
+    {
+      "text_id": 346,
+      "sha256": "bc5f34b5135b327d34fc5324212f29bf423fd421b63f885ba4ef15ce14d75e9b",
+      "text": "Build a solid 4 by 3 by 3 cuboid from bricks."
+    },
+    {
+      "text_id": 347,
+      "sha256": "bcc01dcee95c99685edee82dc03327e2ee8e5d628610dafcb4ff3814b7cbe710",
+      "text": "Build a 5-wide, 2-high wall from wooden planks."
+    },
+    {
+      "text_id": 348,
+      "sha256": "bd16dd430de1a548b09640d1b675e5c52ee25610faf599e4f23c0669a75485fe",
+      "text": "Build a solid 2 by 2 by 3 cuboid from wooden planks."
+    },
+    {
+      "text_id": 349,
+      "sha256": "bdebe2f4f6f0c7d709ed20e9d5e25770c44f1970d14cbed3de8fb586235b8bb1",
+      "text": "Build a 3-wide, 3-high wall from cobblestone."
+    },
+    {
+      "text_id": 350,
+      "sha256": "be0c6dbe97da6d7e41f556c9d9d12942914473e29a47f47990bbff9cfbd78be1",
+      "text": "Lay a 2 by 4 floor using cobblestone."
+    },
+    {
+      "text_id": 351,
+      "sha256": "be0cb39d8b8fc8a68badd7d76bd3f3d1851a82bbef4efc48a68c2e507da4b140",
+      "text": "Build a solid 4 by 2 by 2 cuboid from cobblestone."
+    },
+    {
+      "text_id": 352,
+      "sha256": "bef499ac5f0df411be86aa913be2b5e0a6077e47fc7fb406d6ed7a8a7b2ce3c7",
+      "text": "Build a 5-wide, 2-high wall using dirt, then open a doorway in its center."
+    },
+    {
+      "text_id": 353,
+      "sha256": "bfafbcdf16bf83c94f6ae46dae315ac26d653bea9d37717c9a60c19198a1549f",
+      "text": "Build a solid 4 by 1 by 2 cuboid from stone bricks."
+    },
+    {
+      "text_id": 354,
+      "sha256": "bfbdc415220a1127031ecd0b0f56a2db38ad568e3eea2fbb1570a08e031c8ad6",
+      "text": "Fill the 3 by 4 hole with cobblestone."
+    },
+    {
+      "text_id": 355,
+      "sha256": "c0d9bd54611c864f4919d30a33562ef1d0256106c2cec44fc077a4e28277e715",
+      "text": "Lay a 2 by 2 floor using bricks."
+    },
+    {
+      "text_id": 356,
+      "sha256": "c141c8e32c7332d5e1989d05bea6222899348d29933ecf625f2ac90e7a2d370d",
+      "text": "Place a 5-block line using sea lanterns."
+    },
+    {
+      "text_id": 357,
+      "sha256": "c210fa0fdd26088e2b22709b8e5bce9ade27211c5e2e251039bd773e8e9d9d95",
+      "text": "Repair the 2-block gap in the wall with cobblestone."
+    },
+    {
+      "text_id": 358,
+      "sha256": "c275805e80bba08151498dc2cff16d48c23bfd0ca2bf10db158570a1e668e0ac",
+      "text": "Build a solid 3 by 3 by 2 cuboid from sea lanterns."
+    },
+    {
+      "text_id": 359,
+      "sha256": "c325514f7ef2a2b4452fcb79252ab66e0319632113fe38c3dd295776daf9e461",
+      "text": "Lay a 4 by 3 floor using glass."
+    },
+    {
+      "text_id": 360,
+      "sha256": "c3b84d757889b9b927c321c766539851bbc2f9328c1a4a893aa0eec426579c25",
+      "text": "Build a 5-wide, 3-high wall from glass."
+    },
+    {
+      "text_id": 361,
+      "sha256": "c3e6ddc48200543dfc47e227ae16033946933a80f2fef2a3ba7163cb14d4563f",
+      "text": "Build a solid 4 by 3 by 3 cuboid from stone bricks."
+    },
+    {
+      "text_id": 362,
+      "sha256": "c3ece343a91479920c18005daa6e797adaf92e6dabde9719c6f4912d608f1995",
+      "text": "Build a solid 2 by 1 by 2 cuboid from stone bricks."
+    },
+    {
+      "text_id": 363,
+      "sha256": "c4befc01cf693ffb7574116f78fcbe739ba5fc0c3d759eb9d39d0dbb2fce6dbb",
+      "text": "Repair the 4-block gap in the wall with dirt."
+    },
+    {
+      "text_id": 364,
+      "sha256": "c5116b66f7cf91f8f271608e45c3d36c1745e2ba50dcf31ab54b300b7c9ce341",
+      "text": "Build a solid 3 by 1 by 2 cuboid from stone bricks."
+    },
+    {
+      "text_id": 365,
+      "sha256": "c5402e40d1500cac7c334719193215ecaddd70293bef2908a1b485da78347430",
+      "text": "Build a solid 3 by 3 by 2 cuboid from stone bricks."
+    },
+    {
+      "text_id": 366,
+      "sha256": "c56b89811d7244a7ec178a4b305ee89ae57ab954a5cd13fd3bc2bdc1ddda3ebe",
+      "text": "Build a solid 4 by 1 by 3 cuboid from stone bricks."
+    },
+    {
+      "text_id": 367,
+      "sha256": "c5a633e2beede6c8c51a4508e9c423fe0ec7fbc4d80877687d056e2a9d359fca",
+      "text": "Lay a 2 by 4 floor using bricks."
+    },
+    {
+      "text_id": 368,
+      "sha256": "c5e380d9dc3378c9b79c569bd87391c765281125d56add18b95ae48399058d0d",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: bricks, layer 2 from bottom: tree trunks."
+    },
+    {
+      "text_id": 369,
+      "sha256": "c62ba1303b2c4113eb48eb2d443349e6bd8fc9f6b53d0d65c869e0ee8ef04d61",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: glass, layer 2 from bottom: glass."
+    },
+    {
+      "text_id": 370,
+      "sha256": "c62f130fb0636819d25aac03d8939b6865df76c9c1f1592478d56a198c6add41",
+      "text": "Repair the 4-block gap in the wall with sea lanterns."
+    },
+    {
+      "text_id": 371,
+      "sha256": "c7242c729282003efbbde6b724fa33c8569f6f5b1b5aa8249506f60d490755fb",
+      "text": "Place a 5-block line using wooden planks."
+    },
+    {
+      "text_id": 372,
+      "sha256": "c7bffa339673110289e96113576556aba06609aad277fbeacb79892118d91c8d",
+      "text": "Build a solid 3 by 1 by 3 cuboid from glass."
+    },
+    {
+      "text_id": 373,
+      "sha256": "c7f85993bb81887d8525cddc2b84ccd6bfed7899956891602e3c4129079d0799",
+      "text": "Build a solid 2 by 2 by 3 cuboid from dirt."
+    },
+    {
+      "text_id": 374,
+      "sha256": "c92dee3596e889e1075a9049be980fbf7a3ae70a0d8de384cfa115053a5c7cf5",
+      "text": "Repair the 3-block gap in the wall with bricks."
+    },
+    {
+      "text_id": 375,
+      "sha256": "c9d2ddaadb436b173ba443e9d68b24dea8dde5e74e13564918fcefda9fcecb82",
+      "text": "Mine a shared trench from opposite ends and meet in the middle."
+    },
+    {
+      "text_id": 376,
+      "sha256": "c9ddb013718d97047c0b10dd99de72678dc3ee88cb467d71d81ae4f51a3abeb2",
+      "text": "Build a 3-wide, 3-high wall using glass, then open a doorway in its center."
+    },
+    {
+      "text_id": 377,
+      "sha256": "c9eac631dfe609c955d15a234c21e1b8b70c3890545fd32c9a0dc37e9dbb7e54",
+      "text": "Build a 5-wide, 2-high wall from cobblestone."
+    },
+    {
+      "text_id": 378,
+      "sha256": "ca1c2ea685e148368deb860f18b772ed36a1ca9bf20b3936d7e787d7c0f22c7a",
+      "text": "Lay a 2 by 2 floor using wooden planks."
+    },
+    {
+      "text_id": 379,
+      "sha256": "ca29ef9e34e54cca992ea61c4354dbc7352f90ecc4a3d480a0e9376a570bda2e",
+      "text": "Fill the 4 by 3 hole with dirt."
+    },
+    {
+      "text_id": 380,
+      "sha256": "ca9cab86bce4e5b4b523cb82ee1b1aaa510d6e83690457bbc80c44116c2a4622",
+      "text": "Build a solid 4 by 1 by 2 cuboid from dirt."
+    },
+    {
+      "text_id": 381,
+      "sha256": "cad9f1d15fc978bfb77e26e21fefa054c846d6dd022f5c6e63cc1d348000aeb1",
+      "text": "Fill the 2 by 3 hole with glass."
+    },
+    {
+      "text_id": 382,
+      "sha256": "cc29585dbc8f9a8a7c80e42f6f9822e7912776990401deae7b19015c9fef0099",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: glass, layer 2 from bottom: wooden planks."
+    },
+    {
+      "text_id": 383,
+      "sha256": "cc7da671735a4492f0a995ea79ae7b6a8cd392eeee1ec90cf04b48662ba82f32",
+      "text": "Build a solid 2 by 2 by 2 cuboid from cobblestone."
+    },
+    {
+      "text_id": 384,
+      "sha256": "cd3c1b7a8f64b71108c45e8b9f4b5ed5074c0f84d1ff7e1d7af8612e10ddf6a7",
+      "text": "Fill the 4 by 4 hole with bricks."
+    },
+    {
+      "text_id": 385,
+      "sha256": "ce475c3aeff2d8982d453acf95bd920736d4e8e226845f079f38d0b43ba6711f",
+      "text": "Build a solid 3 by 1 by 3 cuboid from dirt."
+    },
+    {
+      "text_id": 386,
+      "sha256": "ce84f5efbe4805957a5a32eff63b94229706587b2d3fc3ecef9652c32a5984c4",
+      "text": "Repair the 3-block gap in the wall with dirt."
+    },
+    {
+      "text_id": 387,
+      "sha256": "cfa65e968daa89efff8c061c2f1fa56c71081ee4f28f2644f42c64775a47212e",
+      "text": "Build a 5-wide, 3-high wall from wooden planks."
+    },
+    {
+      "text_id": 388,
+      "sha256": "d02392cf66f8089ff3fdc215e3301688c49cfc056ff569ebc565c2b5331d7d1b",
+      "text": "Fill the 3 by 4 hole with stone bricks."
+    },
+    {
+      "text_id": 389,
+      "sha256": "d375f3bca23fd0d5181b854718aaea3187c545562277ff038723c13b42f7299b",
+      "text": "Build a solid 4 by 3 by 3 cuboid from cobblestone."
+    },
+    {
+      "text_id": 390,
+      "sha256": "d3c018926678cf287d1ebc4270ea09c93fb079b21668610caf19f934596799bc",
+      "text": "Lay a 4 by 3 floor using stone bricks."
+    },
+    {
+      "text_id": 391,
+      "sha256": "d3d9c1cf05a31aecf03a183cf1c74180587368bf96330a72c6a1afe8d29df1c1",
+      "text": "Dig a 3 by 4 hole in front of you."
+    },
+    {
+      "text_id": 392,
+      "sha256": "d4a7b35a4dd32272c5ac055566e754cada8f0a45777fc20fef44d6f446ce52f0",
+      "text": "Build a solid 3 by 3 by 2 cuboid from cobblestone."
+    },
+    {
+      "text_id": 393,
+      "sha256": "d55a4f4399cf8cc3f66f7cc743ff9f14a9ec657be898cb24ef7355dce47be6aa",
+      "text": "Lay a 4 by 4 floor using glass."
+    },
+    {
+      "text_id": 394,
+      "sha256": "d5895f4fedabc1992e783842eab47a8bb96440bce778dba9e4a728d5f4d415e4",
+      "text": "Build a 3-wide, 2-high wall from cobblestone."
+    },
+    {
+      "text_id": 395,
+      "sha256": "d7cafe39e423595d97f7519963733db98d53dfd42e268e0eb42e3a072dda8b14",
+      "text": "Lay a 4 by 2 floor using bricks."
+    },
+    {
+      "text_id": 396,
+      "sha256": "d802ce13bfc48eccd94fe35d17096d6ef4f7ef6e4b2e0a7e68ee5f44d64e8941",
+      "text": "Build a solid 4 by 1 by 2 cuboid from glass."
+    },
+    {
+      "text_id": 397,
+      "sha256": "d976ff3a851fc5d7dd49e9fe0eb3c516ddd050fab7de2d40bad8a329e963a537",
+      "text": "Build a 5-wide, 2-high wall using sea lanterns, then open a doorway in its center."
+    },
+    {
+      "text_id": 398,
+      "sha256": "d9d240bb3b996d84a8d6a32ff9dcfee345b3011f06e0f4b9db06823c4f8a318f",
+      "text": "Lay a 3 by 2 floor using cobblestone."
+    },
+    {
+      "text_id": 399,
+      "sha256": "db11566338f801ed8f0a308d813a46ee89bc60e83199fb2d1f87d524e0320eed",
+      "text": "Build a 5-wide, 2-high wall using stone bricks, then open a doorway in its center."
+    },
+    {
+      "text_id": 400,
+      "sha256": "dc033afe4c3ea24355af6c6b254d975235faa9af6e3cd87b06a091b7ccb01743",
+      "text": "Build a 3-wide, 2-high wall from wooden planks."
+    },
+    {
+      "text_id": 401,
+      "sha256": "dc36c1d345b8c84e24148e5092a8dc39192a48db68a13a342a47e4b9f9d2f63d",
+      "text": "Dig a 1-layer rectangular pit, then refill it with layer 1 from bottom: tree trunks."
+    },
+    {
+      "text_id": 402,
+      "sha256": "dc3d54e8055c89faf7b1c8022118e2620861f0b47abc00d6f865b56e1efc4ece",
+      "text": "Repair the 4-block gap in the wall with cobblestone."
+    },
+    {
+      "text_id": 403,
+      "sha256": "dc40fcc1bade75effa12bb5d0f5a32d00ac94e1d62cb8e5668147204ecc1ba53",
+      "text": "Place a 4-block line using bricks."
+    },
+    {
+      "text_id": 404,
+      "sha256": "de4c185921cc42d9c925e649b7bd3eddc7f9ecfdd461936116d46072953c09b0",
+      "text": "Repair the 5-block gap in the wall with wooden planks."
+    },
+    {
+      "text_id": 405,
+      "sha256": "df20db55d16fb207a1534177c97fb0165afda67f9357660ec36460edcd9419e0",
+      "text": "Fill the 4 by 3 hole with cobblestone."
+    },
+    {
+      "text_id": 406,
+      "sha256": "df80b88f8198ab42b3564ed663aeabe0f864023cee45f91e71c407bcf777a95d",
+      "text": "Build a 4-wide, 3-high wall from stone bricks."
+    },
+    {
+      "text_id": 407,
+      "sha256": "df9ece9e4b01aa53e147fb604b3ce1bf88c679564458749dd4cbe0efe4680f35",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: stone bricks, layer 2 from bottom: sea lanterns."
+    },
+    {
+      "text_id": 408,
+      "sha256": "e01a7cbbf459f1d8918cd27ce590e3051671fb8a90e742ced8a79e7a9fb0e097",
+      "text": "Place a 2-block line using cobblestone."
+    },
+    {
+      "text_id": 409,
+      "sha256": "e1422d662feab58e301c7843856c61b61afff48af73a6f026af20ae79d9c58f6",
+      "text": "Build a solid 4 by 3 by 2 cuboid from wooden planks."
+    },
+    {
+      "text_id": 410,
+      "sha256": "e149215e2f1396bc96e25f7469c21e975a0f132a5bf21cd5677130506002a727",
+      "text": "Fill the 2 by 4 hole with bricks."
+    },
+    {
+      "text_id": 411,
+      "sha256": "e184bc580e51a7765032977157bfadc00f32cb7df573d36f70c00e5739fe7891",
+      "text": "Build a solid 2 by 2 by 2 cuboid from glass."
+    },
+    {
+      "text_id": 412,
+      "sha256": "e24c4c252e9b3383295b7cea04aa05193dca6b06cdd4d6bfeddd2bffb3065284",
+      "text": "Build a 3-wide, 2-high wall using dirt, then open a doorway in its center."
+    },
+    {
+      "text_id": 413,
+      "sha256": "e262f27fc22c176ac386e9a8bace60dddf606762d993497eda72da871d922b38",
+      "text": "Build a solid 3 by 2 by 2 cuboid from wooden planks."
+    },
+    {
+      "text_id": 414,
+      "sha256": "e2a8cf24accd1b88ef4e0374869c98301f3c2c91ad362056082bb95bf4a3c16e",
+      "text": "Fill the 2 by 4 hole with glass."
+    },
+    {
+      "text_id": 415,
+      "sha256": "e3aa12805d6075eb92d076bd48ce6a3aa1c3ecfc1c3a2f798eaa94be0654f6f6",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: glass, layer 2 from bottom: bricks."
+    },
+    {
+      "text_id": 416,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "text": ""
+    },
+    {
+      "text_id": 417,
+      "sha256": "e3ed5ae3301d3c5ed5739a280f93097e31305c490adaa4d9cfeb73bd5409dcf5",
+      "text": "Build a solid 3 by 3 by 3 cuboid from bricks."
+    },
+    {
+      "text_id": 418,
+      "sha256": "e45ee698c79737b6dceab5fdb7637a12f626453685ef055c6e292a8921f499a6",
+      "text": "Place a 2-block line using sea lanterns."
+    },
+    {
+      "text_id": 419,
+      "sha256": "e546b85923c392239dd74bea1ae7af3b9f3aa39764ee57c09316c41db3993cb3",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: stone bricks, layer 2 from bottom: glass."
+    },
+    {
+      "text_id": 420,
+      "sha256": "e850ea8bff94e1038dc1295cc8820235cdd281ef5c5df354296b18ae1a0f112c",
+      "text": "Build a 4-wide, 3-high wall from wooden planks."
+    },
+    {
+      "text_id": 421,
+      "sha256": "e8542b630f38b9a1e349fd3bd335c92d65e659014c8230601d4da7c24a204836",
+      "text": "Repair the 2-block gap in the wall with wooden planks."
+    },
+    {
+      "text_id": 422,
+      "sha256": "e8bdde28747e2031775be5b95835ac35faa29b8740de657598d0cc8e779e43ee",
+      "text": "Lay a 4 by 3 floor using dirt."
+    },
+    {
+      "text_id": 423,
+      "sha256": "e90f65411a343c411495e959c8b604ccf3a30af73baea5e1c82cbc816dc9023a",
+      "text": "Build a solid 4 by 2 by 2 cuboid from sea lanterns."
+    },
+    {
+      "text_id": 424,
+      "sha256": "e97906bdb65fa584774d2dc4bcbfe2d082cb6f165985eb351d15ba279b17c2b9",
+      "text": "Build a solid 4 by 2 by 2 cuboid from stone bricks."
+    },
+    {
+      "text_id": 425,
+      "sha256": "e9faceb434648cdad473a77d838a4cbdcba913e887e1fcdfa059f1f1087fae75",
+      "text": "Build a solid 3 by 1 by 2 cuboid from bricks."
+    },
+    {
+      "text_id": 426,
+      "sha256": "ea075b9a56029d68bb6712c59f730f8713625c9f6906eb2f66cc8e4d807b594d",
+      "text": "Build a 3-wide, 3-high wall from glass."
+    },
+    {
+      "text_id": 427,
+      "sha256": "ea3b1dcd45240d37b222627bb839ca552fd77b787260093815c7e4a95b6a6d41",
+      "text": "Build a solid 3 by 2 by 3 cuboid from stone bricks."
+    },
+    {
+      "text_id": 428,
+      "sha256": "ea80d07b824ac5ef0138f577fa27d88b21dc922fdcd6c18b19bb2f48349b5fa6",
+      "text": "Build a solid 3 by 1 by 3 cuboid from stone bricks."
+    },
+    {
+      "text_id": 429,
+      "sha256": "eabd382640260cb5c690ffb2c07abc906f926893a36cbd3a58329ef0c0dfcb16",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: tree trunks, layer 2 from bottom: cobblestone."
+    },
+    {
+      "text_id": 430,
+      "sha256": "eb1366462c2c132e1533c18e6d3ae530d65ba880b59c4620fe96d3c7561f73eb",
+      "text": "Fill the 2 by 2 hole with sea lanterns."
+    },
+    {
+      "text_id": 431,
+      "sha256": "eba7dc3e845a5d018c51bd88c6b3e5bf9e92a213767468950357df942a2855ec",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: dirt, layer 2 from bottom: cobblestone."
+    },
+    {
+      "text_id": 432,
+      "sha256": "ebcafff92ee929258ff5d2ba4e9b53dc5395cbc93832b4df64f935688f0584f9",
+      "text": "Build a solid 4 by 2 by 2 cuboid from dirt."
+    },
+    {
+      "text_id": 433,
+      "sha256": "ebd47baf090d8eb0b98e4c2be527d5867042ba46f46cbcb0d5cf0a5eba9b1001",
+      "text": "Build a 4-wide, 2-high wall from stone bricks."
+    },
+    {
+      "text_id": 434,
+      "sha256": "ebdb4692e7dc5409297b6a8c7896b62de0bd92f2ff3ba1cdd9c23e6d9a8e89af",
+      "text": "Dig a 1-layer rectangular pit, then refill it with layer 1 from bottom: glass."
+    },
+    {
+      "text_id": 435,
+      "sha256": "eccb0dade55ea64f4178bf1d5d679cb9b0f5e630e5fa338d04c8bb49344f9f3e",
+      "text": "Build a solid 3 by 2 by 2 cuboid from sea lanterns."
+    },
+    {
+      "text_id": 436,
+      "sha256": "ed63ca44cfd68c468e5f03d88004900d9885126f1f9b9c68982cb26a0dcd0ebd",
+      "text": "Build a solid 3 by 1 by 3 cuboid from sea lanterns."
+    },
+    {
+      "text_id": 437,
+      "sha256": "eda886b8cc953c040e029060d102c62a3a818c785bf6c2af0f7b20e82cfe428b",
+      "text": "Build a solid 3 by 3 by 2 cuboid from bricks."
+    },
+    {
+      "text_id": 438,
+      "sha256": "ee07d5a680c7b5a12517e090d7db5c7ad7215f8a0272e8d3a5b1da2260a73ecb",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: cobblestone, layer 2 from bottom: dirt."
+    },
+    {
+      "text_id": 439,
+      "sha256": "eeda7437eda6e9fa414340cba8db91308d124cae8c7615b60c97f4071ab3dbe4",
+      "text": "Fill the 4 by 3 hole with stone bricks."
+    },
+    {
+      "text_id": 440,
+      "sha256": "ef142821a82086574d135f953fedb484b3df66695b2a71d565714ccb99706039",
+      "text": "Build a solid 3 by 3 by 2 cuboid from wooden planks."
+    },
+    {
+      "text_id": 441,
+      "sha256": "efde330b57ff522fbae050726718a95784621a1800813efd4b61a33f0c696152",
+      "text": "Lay a 3 by 4 floor using wooden planks."
+    },
+    {
+      "text_id": 442,
+      "sha256": "f103da592e41fec6ce45c9992518631d0e0d99a6e9e06cce878af6986e526deb",
+      "text": "Build a solid 4 by 1 by 2 cuboid from cobblestone."
+    },
+    {
+      "text_id": 443,
+      "sha256": "f145eaf271c66cd6be2db515c436a8ff966e9b61f7d5e2ceb70ec0aa91f817d5",
+      "text": "Lay a 2 by 2 floor using glass."
+    },
+    {
+      "text_id": 444,
+      "sha256": "f1584a38e57b31c7d6f5872ae1a1532619db72470c2465fe499c2695eef9e230",
+      "text": "Fill the 3 by 4 hole with sea lanterns."
+    },
+    {
+      "text_id": 445,
+      "sha256": "f282a168db5ab1f5e4a9ab27d7649c4aac0b776adcea4f27c7d310b31eae59a9",
+      "text": "Build a solid 2 by 1 by 2 cuboid from dirt."
+    },
+    {
+      "text_id": 446,
+      "sha256": "f28d701fe505c9a727070fdff7585e9c9d747d0360645d8e7ead8d802cfbae69",
+      "text": "Lay a 4 by 4 floor using dirt."
+    },
+    {
+      "text_id": 447,
+      "sha256": "f292fca4c110a8f95c5994f9638ca85eaad61d6be51b76904521ba3301476b01",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: tree trunks, layer 2 from bottom: wooden planks."
+    },
+    {
+      "text_id": 448,
+      "sha256": "f2a963d7d946fe3b3767974b818f5b24e4d3a9fb7b0169dc03a5a805f8e6a450",
+      "text": "Build a 3-wide, 2-high wall using glass, then open a doorway in its center."
+    },
+    {
+      "text_id": 449,
+      "sha256": "f30743d8b04d7209d84672a56cbf52f0d729a0c51cb8330e0b5929631e222517",
+      "text": "Build a solid 4 by 2 by 3 cuboid from dirt."
+    },
+    {
+      "text_id": 450,
+      "sha256": "f31113919418cef4c36b8565bc700784140d3577e2d021fe0f596c55286f859a",
+      "text": "Build a solid 3 by 3 by 3 cuboid from dirt."
+    },
+    {
+      "text_id": 451,
+      "sha256": "f31ab7d6a802121f28af170f8d81494ae5bfaaa7c9508c226d78d7fac36ef776",
+      "text": "Build a solid 3 by 3 by 3 cuboid from cobblestone."
+    },
+    {
+      "text_id": 452,
+      "sha256": "f31b87acad800477f11be8e960153fda93cfba355d0824e3430830b46901d65b",
+      "text": "Build a 6-wide, 3-high wall from wooden planks."
+    },
+    {
+      "text_id": 453,
+      "sha256": "f34f88271850d1de776be9b191320375dda4b0d19abdee35c801e30e745df49a",
+      "text": "Build a solid 4 by 1 by 3 cuboid from cobblestone."
+    },
+    {
+      "text_id": 454,
+      "sha256": "f3c8efb977a9d11766fe35d66c58384175b2eef2b612090d7a4777752cbf7588",
+      "text": "Build a solid 3 by 1 by 3 cuboid from bricks."
+    },
+    {
+      "text_id": 455,
+      "sha256": "f3e07b6d639a35c24a95b694250beb7be0bbbf759b78552177d62095efd8e452",
+      "text": "Build a solid 4 by 3 by 2 cuboid from glass."
+    },
+    {
+      "text_id": 456,
+      "sha256": "f5d177518cea32fa6cbae3d15bdcb833943c5acabbd8e6a7de2ca520647ca8af",
+      "text": "Dig a 1-layer rectangular pit, then refill it with layer 1 from bottom: dirt."
+    },
+    {
+      "text_id": 457,
+      "sha256": "f6122d2289c4df0521c836d515e8a8171823068b6077ceae9d4ec006a5128a5e",
+      "text": "Fill the 2 by 3 hole with wooden planks."
+    },
+    {
+      "text_id": 458,
+      "sha256": "f6753e263ad4ac4171e2731840816deea7787bfc520e112e27b96768ed0862a1",
+      "text": "Build a 3-wide, 3-high wall from bricks."
+    },
+    {
+      "text_id": 459,
+      "sha256": "f76423ded3b3632c194e413c1bfcaddfa263a932699c363c675ae6844e2ed6e3",
+      "text": "Repair the 5-block gap in the wall with bricks."
+    },
+    {
+      "text_id": 460,
+      "sha256": "f790f87202c0268dd5469bdeab7aea6ad046e047aeded610f8996d663f00226f",
+      "text": "Fill the 2 by 4 hole with dirt."
+    },
+    {
+      "text_id": 461,
+      "sha256": "f7bf712a649a8e96990309ceecf91a7ac6156a68e25ab8bcdb22bd9644e77eb8",
+      "text": "Fill the 4 by 3 hole with bricks."
+    },
+    {
+      "text_id": 462,
+      "sha256": "f7f2f52c4aec2ed06b837be9c14c80af61fc68eb11c523e4455e015982ab995c",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: sea lanterns, layer 2 from bottom: glass."
+    },
+    {
+      "text_id": 463,
+      "sha256": "f8a1d1a9386f9cec2bba11c4d048742f24a9cc7954aeb58391c0018464b99ed6",
+      "text": "Build two separate towers upward together."
+    },
+    {
+      "text_id": 464,
+      "sha256": "f8e4fbb50cfb0c75fb58b553e1140c887f3c8be80412a332d429bb8958d88267",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: stone bricks, layer 2 from bottom: wooden planks."
+    },
+    {
+      "text_id": 465,
+      "sha256": "f918f568290a9a5966dd02f9c3bf6446a17f68aecda12f694935b8e6b133a132",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: wooden planks, layer 2 from bottom: stone bricks."
+    },
+    {
+      "text_id": 466,
+      "sha256": "fac3cfca756cee296708855941a8067a921c4aff3749e310df3ee54ab50464b9",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: glass, layer 2 from bottom: dirt."
+    },
+    {
+      "text_id": 467,
+      "sha256": "fb4e699c9a0548f0b517e2e3b9907454606713b0a6e3a840e04bcc45b0f01ea3",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: glass, layer 2 from bottom: stone bricks."
+    },
+    {
+      "text_id": 468,
+      "sha256": "fc575bbe81ca7de11b883f913556f30524b7c28a7b90c4a77d9b5d22128cb582",
+      "text": "Lay a 2 by 2 floor using dirt."
+    },
+    {
+      "text_id": 469,
+      "sha256": "fc88cee19740e3e58132794522dc3acac80e9c9316cd2199b07f3236b33f70f9",
+      "text": "Repair the 2-block gap in the wall with glass."
+    },
+    {
+      "text_id": 470,
+      "sha256": "fca853471f3bcfc06342a55b07c3e49473f9718072928df7307990b0f1b73125",
+      "text": "Dig a 2-layer rectangular pit, then refill it with layer 1 from bottom: bricks, layer 2 from bottom: cobblestone."
+    },
+    {
+      "text_id": 471,
+      "sha256": "fd32e8543038198effe91fd6aa0cf67eec9bd3c00a72b36d3b48eb3614b8fe41",
+      "text": "Lay a 2 by 4 floor using glass."
+    },
+    {
+      "text_id": 472,
+      "sha256": "fdc476f121e8b5b957b8b23e71527ba6ae28cab7311fb6478d03d070619e6ac3",
+      "text": "Fill the 4 by 4 hole with cobblestone."
+    },
+    {
+      "text_id": 473,
+      "sha256": "fdd358aa3dee65c150b16e3f967fb09d2dd2a9cb21d68e00fa6c5c4c886bceb9",
+      "text": "Build a solid 3 by 1 by 3 cuboid from cobblestone."
+    },
+    {
+      "text_id": 474,
+      "sha256": "ff82f88371fcb405cf90ab3f0b821a74fef0539f636b0cb02aaecbbb90abf2e7",
+      "text": "Build a 5-wide, 2-high wall from glass."
+    },
+    {
+      "text_id": 475,
+      "sha256": "ffbd20e0911592fa15389dbfbe1b0d0d6bfff11f58f52a78527a3807a344a584",
+      "text": "Fill the 3 by 2 hole with wooden planks."
+    }
+  ]
+}

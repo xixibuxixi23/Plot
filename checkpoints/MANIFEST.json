@@ -1,0 +1,42 @@
+{
+  "schema_version": "plot-checkpoint-assets-v1",
+  "assets": [
+    {
+      "path": "pixel_vae/model.safetensors",
+      "role": "frozen RGB/latent codec for M3 and M4",
+      "required": true,
+      "bytes": 909781080,
+      "sha256": "eb634803c94aeea980046961382f2ab67157aa71e92c5a183a35e4f61f8cbc36",
+      "source": "rcz/2daction/checkpoints/pixel_vae/model.safetensors"
+    },
+    {
+      "path": "m3_backbone/model.safetensors",
+      "role": "2DAction-compatible warm start for the M3 renderer core",
+      "required": false,
+      "bytes": 1844184424,
+      "sha256": "8cfe5ecc3e2885285c053adff837eedaca610ebd980db99b04c15dc0ac439abb",
+      "source": "rcz/2daction/checkpoints/pretrained_multiagent/checkpoint_21240/model.safetensors"
+    },
+    {
+      "path": "m4_text/text_catalog.json",
+      "role": "canonical M4 text catalog",
+      "required": true,
+      "bytes": 90898,
+      "sha256": "b86054c88b6ee1bfcd3ab1f7165c58e676a39e7c851aef8990845604ecefeded",
+      "source": "derived/m4/text_catalog.json"
+    },
+    {
+      "path": "m4_text/text_cache.safetensors",
+      "role": "frozen T5 embeddings for the canonical M4 text catalog",
+      "required": true,
+      "bytes": 46823344,
+      "sha256": "fd5ec83c3a6ae0fa4fe14be2598a359bad0a2baf4268dc36954e14241a3a682d",
+      "source": "google/t5-v1_1-base@b5fc947a416ea3cb079532cb3c2bbadeb7f800fc"
+    }
+  ],
+  "validation": {
+    "pixel_vae": "strict load: 264 tensors, 227438924 parameters",
+    "m3_backbone": "236/237 current M3 core tensors matched by name and shape; window_prefix_embedding is PLOT-initialized",
+    "m4_text": "encoder_hidden [476,64,768] bfloat16; attention_mask [476,64] uint8"
+  }
+}

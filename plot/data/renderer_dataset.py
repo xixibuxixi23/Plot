@@ -1,0 +1,317 @@
+"""Continuous TextAgent observations -> M3 clips, without changing public data."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import cv2
+import numpy as np
+import torch
+from torch.utils.data import Dataset
+
+from .fill_dataset import BlockVocabulary, TextAgentFillDataset, _read_video_frames
+
+
+RESIDENT_TYPES = {"human_like": 0, "npc_villager": 1, "npc_zombie": 2, "npc_skeleton": 3}
+
+
+def merge_observation_crops(raw, centers, anchor, vocabulary, preferred_index=None):
+    """Map this observation's 49³ cubes into one fixed 48³ target window.
+
+    Missing coverage is explicitly UNFILLED, never mislabeled air. No future
+    observation is used to fill a boundary. Centers are integer ENU metadata.
+    """
+    blocks = np.zeros((48, 48, 48), np.int64)
+    known = np.zeros_like(blocks, bool)
+    lower = np.asarray(anchor, np.int64) - 24
+    order = list(range(len(raw)))
+    if preferred_index is not None:
+        order.remove(int(preferred_index))
+        order.insert(0, int(preferred_index))
+    for observer in order:
+        cube, center = raw[observer], centers[observer]
+        source_lower = np.asarray(center, np.int64) - 24
+        lo, hi = np.maximum(lower, source_lower), np.minimum(lower + 48, source_lower + 49)
+        if np.any(lo >= hi):
+            continue
+        src = tuple(
+            slice(int(low), int(high))
+            for low, high in zip(lo - source_lower, hi - source_lower)
+        )
+        dst = tuple(
+            slice(int(low), int(high)) for low, high in zip(lo - lower, hi - lower)
+        )
+        values, valid = vocabulary.encode(cube[src][..., 0])
+        # Rare one-voxel edit boundaries can be visible to clients one render
+        # apart. The target resident's own same-frame crop is authoritative;
+        # other synchronized crops only extend currently unknown coverage.
+        write = valid & ~known[dst]
+        np.copyto(blocks[dst], values, where=write)
+        known[dst] |= valid
+    return blocks, known
+
+
+def raster_camera(camera_world, camera_direction, fov_x, anchor):
+    """ENU world camera -> normalized cube W2C, with center used only here.
+
+    Raw integer block positions are block centers; a 48³ half-open tile's
+    geometric center is anchor - .5. Translation is -R C, not C itself.
+    """
+    forward = np.asarray(camera_direction, np.float32)
+    norm = np.linalg.norm(forward, axis=-1, keepdims=True)
+    if not np.isfinite(norm).all() or np.any(norm < 1e-6):
+        raise ValueError("invalid camera direction")
+    forward = forward / norm
+    down = np.broadcast_to(np.array([0, 0, -1], np.float32), forward.shape).copy()
+    singular = np.abs(forward[..., 2]) > .999
+    down[singular] = [0, -1, 0]
+    right = np.cross(down, forward)
+    right /= np.linalg.norm(right, axis=-1, keepdims=True)
+    down = np.cross(forward, right)
+    rotation = np.stack((right, down, forward), axis=-2)
+    local = (np.asarray(camera_world) - (np.asarray(anchor) - .5)) / 48.
+    translation = -np.einsum("...ij,...j->...i", rotation, local)
+    return np.concatenate((rotation[..., :2, :].reshape(*local.shape[:-1], 6),
+                           translation, np.asarray(fov_x)[..., None]), axis=-1).astype(np.float32)
+
+
+def incoming_actions(actions, start, length):
+    result = np.zeros((length, *actions.shape[1:]), np.float32)
+    # The first observation is a window boundary, with a learned prefix token.
+    result[1:] = actions[start:start + length - 1]
+    return result
+
+
+class TextAgentRendererDataset(Dataset):
+    def __init__(self, root, vocabulary, *, split="train", context_frames=65,
+                 stride=8, image_size=(360, 640), latent_size=(36, 64), max_agents=8,
+                 window_index=None, targets_per_window=1):
+        if context_frames < 9 or (context_frames - 1) % 8 or stride < 1:
+            raise ValueError("context_frames must be 1+8*k; stride must be positive")
+        if targets_per_window < 1:
+            raise ValueError("targets_per_window must be positive")
+        self.targets_per_window = int(targets_per_window)
+        self.vocabulary = vocabulary if isinstance(vocabulary, BlockVocabulary) else BlockVocabulary.load(vocabulary)
+        self.context_frames, self.image_size, self.latent_size = context_frames, image_size, latent_size
+        self.episodes, self.index = [], []
+        self.item_vocabulary = None
+        if window_index is not None:
+            cached = torch.load(window_index, map_location="cpu", weights_only=False)
+            if cached.get("context_frames") != context_frames or cached.get("split") != split:
+                raise ValueError("M3 window index context/split does not match the dataset")
+            self.item_vocabulary = cached["item_vocabulary"]
+            dataset_root = Path(root)
+            self.episodes = [
+                (
+                    path if (path := Path(row["path"])).is_absolute() else dataset_root / path,
+                    row["manifest"],
+                )
+                for row in cached["episodes"]
+            ]
+            self.index = [tuple(value) for value in cached["windows"]]
+            if not self.index:
+                raise ValueError("M3 window index is empty")
+            if self.targets_per_window > 1:
+                self.index = self._group_target_windows(self.index, self.targets_per_window)
+            return
+        for path in sorted(Path(root).rglob("manifest.json")):
+            manifest = json.loads(path.read_text())
+            if manifest.get("split") != split:
+                continue
+            validation = path.with_name("validation.json")
+            if not validation.exists() or not json.loads(validation.read_text()).get("usable"):
+                continue
+            agents = int(manifest["num_agents"])
+            if not 1 <= agents <= max_agents:
+                raise ValueError(f"unsupported number of residents in {path}")
+            metadata = json.loads(path.with_name("training_metadata.json").read_text())
+            items = metadata["item_vocabulary"]
+            if self.item_vocabulary is not None and items != self.item_vocabulary:
+                raise ValueError("item vocabularies differ; unify IDs before M3 training")
+            self.item_vocabulary = items
+            with np.load(path.parent / manifest.get("training_data_file", "data.npz")) as data:
+                frames = len(data["cam_pos"])
+                if len(data["action_continuous"]) != frames - 1:
+                    raise ValueError("M3 requires T actions and T+1 observations")
+                start = TextAgentFillDataset._model_start(data, manifest)
+                health = data["player_health"]
+                valid = data["player_health_valid"].astype(bool) & np.isfinite(health)
+                terminations = np.asarray(data["termination_flag"], bool)
+                if terminations.ndim > 1:
+                    terminations = terminations.any(axis=tuple(range(1, terminations.ndim)))
+            episode_id = len(self.episodes)
+            self.episodes.append((path.parent, manifest))
+            for begin in range(start, frames - context_frames + 1, stride):
+                end = begin + context_frames
+                if terminations[begin:end-1].any() or not valid[begin:end].all():
+                    continue
+                for target in range(agents):
+                    if (health[begin:end, target] <= 0).any():
+                        continue
+                    self.index.append((episode_id, begin, target))
+        if not self.index:
+            raise ValueError("no accepted continuous M3 windows with valid HP found")
+        if self.targets_per_window > 1:
+            self.index = self._group_target_windows(self.index, self.targets_per_window)
+
+    @staticmethod
+    def _group_target_windows(index, required):
+        """Collapse adjacent per-target rows into one window with valid targets.
+
+        Cached indexes are emitted in episode/start/target order. Requiring the
+        requested number of targets keeps the flattened training batch size
+        identical on every DDP rank.
+        """
+        grouped = []
+        previous = None
+        targets = []
+        for episode, start, target in index:
+            key = (int(episode), int(start))
+            if previous is not None and key != previous:
+                if len(targets) >= required:
+                    grouped.append((*previous, tuple(targets)))
+                targets = []
+            if previous is not None and key < previous:
+                raise ValueError("M3 window index must be sorted by episode and start")
+            previous = key
+            targets.append(int(target))
+        if previous is not None and len(targets) >= required:
+            grouped.append((*previous, tuple(targets)))
+        if not grouped:
+            raise ValueError(f"no M3 windows have {required} valid target residents")
+        return grouped
+
+    @classmethod
+    def read_window(cls, episode, vocabulary, *, start, target, context_frames,
+                    image_size=(360, 640), latent_size=(36, 64)):
+        """Read one explicit window without rescanning an episode index."""
+        path = Path(episode)
+        manifest = json.loads((path / "manifest.json").read_text())
+        instance = cls.__new__(cls)
+        instance.vocabulary = (vocabulary if isinstance(vocabulary, BlockVocabulary)
+                               else BlockVocabulary.load(vocabulary))
+        instance.context_frames = int(context_frames)
+        instance.image_size, instance.latent_size = image_size, latent_size
+        instance.episodes = [(path, manifest)]
+        instance.index = [(0, int(start), int(target))]
+        metadata = json.loads((path / "training_metadata.json").read_text())
+        instance.item_vocabulary = metadata["item_vocabulary"]
+        return instance[0]
+
+    def __len__(self):
+        return len(self.index)
+
+    def __getitem__(self, index):
+        episode_id, start, target = self.index[index]
+        if isinstance(target, (tuple, list)):
+            order = torch.randperm(len(target))[: self.targets_per_window].tolist()
+            return [self._read_target(episode_id, start, target[i]) for i in order]
+        return self._read_target(episode_id, start, target)
+
+    def _read_target(self, episode_id, start, target):
+        path, manifest = self.episodes[episode_id]
+        t, a = self.context_frames, int(manifest["num_agents"])
+        end = start + t
+        with np.load(path / manifest.get("training_data_file", "data.npz"), allow_pickle=False) as data:
+            centers = data["obs_voxel_center"][start:end]
+            raw = data["obs_voxel_mt"][start:end]
+            # obs0 is the prefix. Frames 1..8 use obs0's anchor, 9..16 obs8's, etc.
+            anchors = np.stack([centers[0 if i == 0 else ((i-1)//8)*8, target] for i in range(t)])
+            crops = [merge_observation_crops(raw[i], centers[i], anchors[i], self.vocabulary,
+                                             preferred_index=target)
+                     for i in range(t)]
+            position = data["player_pos"][start:end].astype(np.float32)
+            camera = data["cam_pos"][start:end].astype(np.float32)
+            direction = data["cam_dir"][start:end].astype(np.float32)
+            fov = data["fov_x"][start:end].astype(np.float32)
+            fov = np.broadcast_to(fov[:, None], (t, a)).copy() if fov.ndim == 1 else fov
+            health = data["player_health"][start:end].astype(np.float32)
+            entity_ids = list(data["entity_id"].astype(str))
+            entity_slots = [entity_ids.index(f"agent{i}") for i in range(a)]
+            # Canonical item-vocabulary IDs are transition-aligned. The final
+            # observation has no outgoing action, so it retains the last item.
+            wielded = data["wielded_item_id"]
+            held_indices = np.minimum(np.arange(start, end), len(wielded) - 1)
+            held = wielded[held_indices, :a].astype(np.int64)
+            item_count = max(self.item_vocabulary.values(), default=0) + 1
+            if held.min(initial=0) < 0 or held.max(initial=0) >= item_count:
+                raise ValueError("wielded_item_id is outside the canonical item vocabulary")
+            # Dataset player angles are degrees; the network consumes radians.
+            angles = np.deg2rad(np.stack((data["player_yaw"][start:end],
+                                          data["player_pitch"][start:end]), axis=-1)).astype(np.float32)
+            masks = data["instance_mask"][start:end, target]
+            if masks.dtype != np.uint16:
+                raise ValueError("instance_mask must retain the raw uint16 entity IDs")
+            weights = np.stack([cv2.resize((m != 0).astype(np.float32), self.latent_size[::-1],
+                                            interpolation=cv2.INTER_AREA) for m in masks])
+            actions = incoming_actions(data["action_continuous"], start, t)
+            active = data["entity_valid"][start:end, entity_slots].astype(bool)
+        kinds = manifest["agent_kinds"]
+        types = np.broadcast_to([RESIDENT_TYPES[kinds[f"agent{i}"]] for i in range(a)], (t, a)).copy()
+        cues = np.zeros((t, a, 4), np.float32)
+        cues[1:, :, 3] = health[1:] - health[:-1]
+        event_path = path / manifest.get("event_file", "events.jsonl")
+        for line in event_path.read_text().splitlines():
+            event = json.loads(line)
+            frame = int(event.get("observation_frame", -1)) - start
+            if not 1 <= frame < t:
+                continue
+            source, recipient = event.get("source", event.get("actor")), event.get("target")
+            kind = event.get("event")
+            for slot in range(a):
+                if source == f"agent{slot}" and kind in {"block_dug", "block_placed"}:
+                    cues[frame, slot, 0] += 1
+                if kind == "damage":
+                    if source == f"agent{slot}":
+                        cues[frame, slot, 1] += 1
+                    if recipient == f"agent{slot}":
+                        cues[frame, slot, 2] += 1
+        skins = []
+        for slot in range(a):
+            views = []
+            for view in ("front", "back", "left", "right"):
+                image_path = path / "players" / f"agent{slot}" / f"{view}.png"
+                image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
+                if image is None:
+                    raise ValueError(f"missing appearance view: {image_path}")
+                image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGBA if image.shape[-1] == 4 else cv2.COLOR_BGR2RGBA)
+                views.append(np.moveaxis(cv2.resize(image, (64, 64)).astype(np.float32) / 255., -1, 0))
+            skins.append(np.stack(views))
+        videos = manifest.get("agent_video_files") or [f"rgb_agent{i}.mp4" for i in range(a)]
+        decoded = _read_video_frames(path / videos[target], range(start, end), self.image_size)
+        rgb = np.stack([decoded[i] for i in range(start, end)])
+        condition = {
+            "voxel_classes": np.stack([c[0] for c in crops]),
+            "voxel_known": np.stack([c[1] for c in crops]),
+            "raster_camera": raster_camera(camera[:, target], direction[:, target], fov[:, target], anchors),
+            "target_agent": np.asarray(target, np.int64), "player_position": position,
+            "camera_relative": camera - position, "camera_direction": direction, "fov_x": fov,
+            "hp": health, "yaw_pitch": angles, "held_item": held, "resident_type": types,
+            "event_cues": cues, "action": actions, "player_valid": active,
+            "player_skin": np.stack(skins), "player_appearance_valid": np.ones((a, 4), bool),
+            "condition_mask": np.arange(t) == 0, "action_prefix_mask": np.arange(t) == 0,
+        }
+        return {"rgb": torch.from_numpy(rgb), "region_weight": torch.from_numpy(1 + 4 * weights[:, None]),
+                "conditions": {k: torch.from_numpy(v) for k, v in condition.items()}}
+
+
+def collate_renderer(samples):
+    """Flatten selected target views, then pad resident-condition slots."""
+    samples = [view for sample in samples for view in (sample if isinstance(sample, list) else [sample])]
+    max_agents = max(s["conditions"]["player_position"].shape[1] for s in samples)
+    temporal_agent = {"player_position", "camera_relative", "camera_direction", "fov_x", "hp",
+                      "yaw_pitch", "held_item", "resident_type", "event_cues", "action", "player_valid"}
+    result = {}
+    for key in samples[0]["conditions"]:
+        values = []
+        for sample in samples:
+            value = sample["conditions"][key]
+            axis = 1 if key in temporal_agent else 0 if key in {"player_skin", "player_appearance_valid"} else None
+            if axis is not None and value.shape[axis] < max_agents:
+                shape = list(value.shape)
+                shape[axis] = max_agents - shape[axis]
+                value = torch.cat((value, value.new_zeros(shape)), dim=axis)
+            values.append(value)
+        result[key] = torch.stack(values)
+    return {"conditions": result, "rgb": torch.stack([s["rgb"] for s in samples]),
+            "region_weight": torch.stack([s["region_weight"] for s in samples])}

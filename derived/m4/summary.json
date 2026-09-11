@@ -1,0 +1,84 @@
+{
+  "schema_version": "plot-m4-index-v2",
+  "max_windows_per_agent": 12,
+  "max_wait_windows_per_agent": 2,
+  "splits": {
+    "train": {
+      "episodes_scanned": 40403,
+      "windows": 1058239,
+      "families": {
+        "language_builder": 890655,
+        "villager": 29475,
+        "combat": 138109
+      },
+      "profiles": {
+        "language_builder": 890655,
+        "villager_peaceful": 29475,
+        "zombie_melee": 54564,
+        "skeleton_swordsman": 59327,
+        "villager_defender": 24218
+      },
+      "priorities": {
+        "ordinary": 619256,
+        "edit": 337035,
+        "intentional_wait": 70738,
+        "attack": 31210
+      },
+      "scenarios": {
+        "S01": 604694,
+        "S03": 80403,
+        "S05": 65223,
+        "S07": 117891,
+        "S08": 44555,
+        "S09": 47304,
+        "S10": 98169
+      },
+      "weighted_profiles": {
+        "language_builder": 1075341.75,
+        "villager_peaceful": 907886.41692131,
+        "zombie_melee": 1077954.6993909492,
+        "skeleton_swordsman": 1093712.2398099306,
+        "villager_defender": 1153782.1724029342
+      }
+    },
+    "val_id": {
+      "episodes_scanned": 2576,
+      "windows": 61196,
+      "families": {
+        "language_builder": 52440,
+        "villager": 1512,
+        "combat": 7244
+      },
+      "profiles": {
+        "language_builder": 52440,
+        "villager_peaceful": 1512,
+        "skeleton_swordsman": 3245,
+        "zombie_melee": 2671,
+        "villager_defender": 1328
+      },
+      "priorities": {
+        "ordinary": 35250,
+        "edit": 20023,
+        "intentional_wait": 4222,
+        "attack": 1701
+      },
+      "scenarios": {
+        "S01": 37833,
+        "S03": 3876,
+        "S05": 3407,
+        "S07": 5949,
+        "S08": 2314,
+        "S09": 2350,
+        "S10": 5467
+      },
+      "weighted_profiles": {
+        "language_builder": 63424.75,
+        "villager_peaceful": 53437.12301587174,
+        "skeleton_swordsman": 64523.824345148365,
+        "zombie_melee": 64097.150879822155,
+        "villager_defender": 68748.52409638537
+      }
+    }
+  },
+  "path_mode": "relative_to_dataset_root"
+}
