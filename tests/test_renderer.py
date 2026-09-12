@@ -7,7 +7,13 @@ from plot.data.fill_dataset import BlockVocabulary
 from plot.data.renderer_dataset import incoming_actions, merge_observation_crops, raster_camera
 from plot.models.renderer import Renderer, RendererArgs
 from plot.pipelines.renderer_pipeline import RendererMemoryBlock
-from plot.training.renderer_trainer import RendererRollout, renderer_flow_loss, slice_conditions
+from plot.training.renderer_trainer import (
+    RendererRollout,
+    renderer_flow_loss,
+    renderer_pixel_losses,
+    renderer_training_losses,
+    slice_conditions,
+)
 
 
 torch.set_num_threads(2)
@@ -228,6 +234,8 @@ def test_continuous_dataset_preserves_state_time_and_splits(tmp_path, monkeypatc
     assert cond['event_cues'][9,1,1] == 1
     assert cond['resident_type'][:,1].tolist() == [3]*17
     assert sample['region_weight'].min() == 5
+    assert sample['pixel_region_mask'].dtype == torch.bool
+    assert sample['pixel_region_mask'].shape == (17, 1, 4, 4)
     assert not {'instance_mask','crop_anchor','behavior_text'} & cond.keys()
     paired = module.TextAgentRendererDataset(
         tmp_path, BlockVocabulary((0,7)), context_frames=17,
@@ -237,6 +245,13 @@ def test_continuous_dataset_preserves_state_time_and_splits(tmp_path, monkeypatc
     assert {int(view['conditions']['target_agent']) for view in paired} == {0, 1}
     flat = module.collate_renderer([paired])
     assert flat['rgb'].shape[:2] == (2, 17)
+    assert flat['pixel_region_mask'].shape == (2, 17, 1, 4, 4)
+
+    uniform = module.TextAgentRendererDataset(
+        tmp_path, BlockVocabulary((0,7)), context_frames=17,
+        image_size=(4,4), latent_size=(4,4), entity_region_upweight=0,
+    )[0]
+    assert uniform['region_weight'].min() == uniform['region_weight'].max() == 1
     with pytest.raises(ValueError,match='no accepted'):
         module.TextAgentRendererDataset(tmp_path,BlockVocabulary((0,7)),split='test',context_frames=17)
 
@@ -275,6 +290,49 @@ def test_frozen_codec_rgb_latent_layout():
     assert latent.shape == (1,9,16,4,4) and rgb.shape == (1,9,3,40,40)
     assert 0 <= rgb.min() <= rgb.max() <= 1
     assert not latent.requires_grad and not codec.vae.training
+    predicted = latent[:, :1].detach().requires_grad_()
+    codec.decode_for_loss(predicted).mean().backward()
+    assert predicted.grad.abs().sum() > 0
+    assert all(parameter.grad is None for parameter in codec.parameters())
+
+
+def test_full_resolution_entity_and_health_losses_are_differentiable():
+    class Codec:
+        def decode_for_loss(self, latent, chunk_size=1):
+            return latent[:, :, :3]
+
+    predicted = torch.zeros(1, 3, 3, 4, 4, requires_grad=True)
+    target = torch.zeros_like(predicted)
+    target[:, 1:, :, :2, :2] = 1
+    entity = torch.zeros(1, 3, 1, 4, 4, dtype=torch.bool)
+    entity[:, 1:, :, :2, :2] = True
+    losses = renderer_pixel_losses(
+        Codec(), predicted, target, entity,
+        frames_per_sample=2, generator=torch.Generator().manual_seed(0),
+        health_box=(0, 0, 0.5, 0.5),
+    )
+    assert losses['entity_pixel_l1'] == 1
+    assert losses['health_pixel_l1'] == 1
+    assert losses['entity_pixel_edge'] > 0
+    sum(losses.values()).backward()
+    assert predicted.grad.abs().sum() > 0
+
+
+def test_combined_renderer_loss_can_disable_pixel_decoder():
+    class Codec:
+        def decode_for_loss(self, latent, chunk_size=1):
+            raise AssertionError("zero pixel weights must skip decoding")
+
+    model = tiny_model().train()
+    clean = torch.randn(1, 65, 16, 4, 4)
+    terms = renderer_training_losses(
+        model, Codec(), clean, conditions(65), torch.rand(1, 65, 3, 4, 4),
+        torch.ones(1, 65, 1, 4, 4, dtype=torch.bool),
+        entity_pixel_l1_weight=0, entity_pixel_edge_weight=0,
+        health_pixel_l1_weight=0,
+    )
+    torch.testing.assert_close(terms['total_loss'], terms['flow_loss'])
+    assert terms['auxiliary_loss'] == 0
 
 
 def test_kv_cache_uses_requested_inference_dtype():

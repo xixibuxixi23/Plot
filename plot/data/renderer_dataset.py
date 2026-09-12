@@ -85,12 +85,15 @@ def incoming_actions(actions, start, length):
 class TextAgentRendererDataset(Dataset):
     def __init__(self, root, vocabulary, *, split="train", context_frames=65,
                  stride=8, image_size=(360, 640), latent_size=(36, 64), max_agents=8,
-                 window_index=None, targets_per_window=1):
+                 window_index=None, targets_per_window=1, entity_region_upweight=4.0):
         if context_frames < 9 or (context_frames - 1) % 8 or stride < 1:
             raise ValueError("context_frames must be 1+8*k; stride must be positive")
         if targets_per_window < 1:
             raise ValueError("targets_per_window must be positive")
         self.targets_per_window = int(targets_per_window)
+        if entity_region_upweight < 0:
+            raise ValueError("entity_region_upweight must be nonnegative")
+        self.entity_region_upweight = float(entity_region_upweight)
         self.vocabulary = vocabulary if isinstance(vocabulary, BlockVocabulary) else BlockVocabulary.load(vocabulary)
         self.context_frames, self.image_size, self.latent_size = context_frames, image_size, latent_size
         self.episodes, self.index = [], []
@@ -192,6 +195,7 @@ class TextAgentRendererDataset(Dataset):
                                else BlockVocabulary.load(vocabulary))
         instance.context_frames = int(context_frames)
         instance.image_size, instance.latent_size = image_size, latent_size
+        instance.entity_region_upweight = 4.0
         instance.episodes = [(path, manifest)]
         instance.index = [(0, int(start), int(target))]
         metadata = json.loads((path / "training_metadata.json").read_text())
@@ -291,7 +295,12 @@ class TextAgentRendererDataset(Dataset):
             "player_skin": np.stack(skins), "player_appearance_valid": np.ones((a, 4), bool),
             "condition_mask": np.arange(t) == 0, "action_prefix_mask": np.arange(t) == 0,
         }
-        return {"rgb": torch.from_numpy(rgb), "region_weight": torch.from_numpy(1 + 4 * weights[:, None]),
+        pixel_region_mask = (masks != 0)[:, None]
+        return {"rgb": torch.from_numpy(rgb),
+                "region_weight": torch.from_numpy(
+                    1 + self.entity_region_upweight * weights[:, None]
+                ),
+                "pixel_region_mask": torch.from_numpy(pixel_region_mask),
                 "conditions": {k: torch.from_numpy(v) for k, v in condition.items()}}
 
 
@@ -314,4 +323,5 @@ def collate_renderer(samples):
             values.append(value)
         result[key] = torch.stack(values)
     return {"conditions": result, "rgb": torch.stack([s["rgb"] for s in samples]),
-            "region_weight": torch.stack([s["region_weight"] for s in samples])}
+            "region_weight": torch.stack([s["region_weight"] for s in samples]),
+            "pixel_region_mask": torch.stack([s["pixel_region_mask"] for s in samples])}

@@ -123,6 +123,7 @@ def test_dataset_aligns_eight_completed_frames_to_next_chunk(tmp_path, monkeypat
     def fake_window(cls, path, vocabulary, **kwargs):
         captured.update(kwargs)
         return {"rgb": torch.zeros(65, 3, 4, 4), "region_weight": torch.ones(65, 1, 1, 1),
+                "pixel_region_mask": torch.zeros(65, 1, 4, 4, dtype=torch.bool),
                 "conditions": {"action": torch.zeros(65, 2, 23)}}
     monkeypatch.setattr(TextAgentRendererDataset, "read_window", classmethod(fake_window))
     index = tmp_path / "index.jsonl"

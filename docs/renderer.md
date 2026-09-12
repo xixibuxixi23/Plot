@@ -33,10 +33,11 @@ not reuse the pre-action inventory field as the next observation's held item.
 HP/profile/text/center conventions follow the method. The first clip frame has
 a learned action-prefix indicator. World-relative angles are supplied in radians.
 
-Raw uint16 instance masks are reduced to fractional region weights only for the
-loss. Four-view PNGs are mandatory. Missing crop coverage has an explicit unknown
-embedding; it is not silently converted to air or filled with future observations.
-Live rendering requires M1 to fill all unknown cells first.
+Raw uint16 instance masks provide both latent-resolution weights and exact
+full-resolution entity masks; neither is a neural input. Four-view PNGs are
+mandatory. Missing crop coverage has an explicit unknown embedding; it is not
+silently converted to air or filled with future observations. Live rendering
+requires M1 to fill all unknown cells first.
 
 ## Training
 
@@ -60,9 +61,20 @@ torchrun --standalone --nproc_per_node=8 train_scripts/train_renderer.py \
   --batch-size 1 --steps 10000
 ```
 
-The entry point encodes RGB with a frozen VAE, predicts all 64 unknown frames
-in one causal forward, weights entity/weapon regions and saves
-model/optimizer/config checkpoints. Each source batch row is one episode
+The entry point encodes RGB with a frozen VAE and predicts all 64 unknown frames
+in one causal forward. By default, each target view randomly selects one future
+frame, reconstructs its clean latent estimate, and decodes it through the frozen
+VAE with gradients retained to M3. The auxiliary objective contains RGB L1 in
+the exact full-resolution entity mask, spatial-gradient L1 around entity edges,
+and RGB L1 over the Minecraft heart bar (`x=190:314, y=300:322` at 640x360).
+The default objective is
+`flow + 0.1*entity_L1 + 0.05*entity_edge + 0.2*health_L1`; the VAE stays frozen.
+The old latent entity-region upweight is disabled by default so that it does not
+double-count the new pixel objective. Configure these terms with
+`--pixel-loss-frames`, `--entity-pixel-l1-weight`,
+`--entity-pixel-edge-weight`, `--health-pixel-l1-weight`, and
+`--latent-entity-region-upweight`. Checkpoints save model/optimizer/config state.
+Each source batch row is one episode
 window; its two randomly selected target views are flattened before VAE and M3
 execution. Only accepted `train` manifests are read;
 item dictionaries must agree across episodes. It rejects clips with missing HP

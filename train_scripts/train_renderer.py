@@ -24,7 +24,17 @@ from plot.models.renderer import Renderer, RendererArgs
 from plot.models.renderer_codec import RendererCodec
 from plot.checkpoint_io import record_checkpoint_failure, staged_torch_save
 from plot.training.renderer_monitoring import render_probe, save_probe_manifest, select_renderer_probes
-from plot.training.renderer_trainer import renderer_flow_loss
+from plot.training.renderer_trainer import renderer_training_losses
+
+
+LOSS_NAMES = (
+    "total_loss",
+    "flow_loss",
+    "auxiliary_loss",
+    "entity_pixel_l1",
+    "entity_pixel_edge",
+    "health_pixel_l1",
+)
 
 
 def load_weights(path):
@@ -64,6 +74,21 @@ def main():
     parser.add_argument("--log-every", type=int, default=20)
     parser.add_argument("--gradient-accumulation", type=int, default=1)
     parser.add_argument("--precision", choices=("bf16", "fp32"), default="bf16")
+    parser.add_argument(
+        "--latent-entity-region-upweight",
+        type=float,
+        default=0.0,
+        help="Extra latent flow weight inside entity masks; 0 keeps flow loss uniform",
+    )
+    parser.add_argument(
+        "--pixel-loss-frames",
+        type=int,
+        default=1,
+        help="Random future frames decoded per target view and training step",
+    )
+    parser.add_argument("--entity-pixel-l1-weight", type=float, default=0.1)
+    parser.add_argument("--entity-pixel-edge-weight", type=float, default=0.05)
+    parser.add_argument("--health-pixel-l1-weight", type=float, default=0.2)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default="cuda")
@@ -93,6 +118,15 @@ def main():
         < 1
     ):
         parser.error("steps, save interval, anchors and batch size must be positive")
+    if not 1 <= args.pixel_loss_frames < args.context_frames:
+        parser.error("pixel-loss-frames must be within the future-frame count")
+    if min(
+        args.latent_entity_region_upweight,
+        args.entity_pixel_l1_weight,
+        args.entity_pixel_edge_weight,
+        args.health_pixel_l1_weight,
+    ) < 0:
+        parser.error("region and pixel loss weights must be nonnegative")
     world = int(os.environ.get("WORLD_SIZE", "1"))
     rank = int(os.environ.get("RANK", "0"))
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
@@ -118,6 +152,7 @@ def main():
         context_frames=args.context_frames,
         window_index=args.window_index,
         targets_per_window=args.target_views_per_window,
+        entity_region_upweight=args.latent_entity_region_upweight,
     )
     sampler = (
         DistributedSampler(dataset, num_replicas=world, rank=rank, shuffle=True, seed=args.seed)
@@ -211,6 +246,7 @@ def main():
             split="val_id",
             context_frames=args.context_frames,
             window_index=args.val_window_index,
+            entity_region_upweight=args.latent_entity_region_upweight,
         )
         val_sampler = (
             DistributedSampler(val_dataset, num_replicas=world, rank=rank, shuffle=False)
@@ -235,9 +271,15 @@ def main():
         )
     iterator = iter(loader)
     epoch = 0
+    loss_kwargs = {
+        "frames_per_sample": args.pixel_loss_frames,
+        "entity_pixel_l1_weight": args.entity_pixel_l1_weight,
+        "entity_pixel_edge_weight": args.entity_pixel_edge_weight,
+        "health_pixel_l1_weight": args.health_pixel_l1_weight,
+    }
     for step in range(start_step + 1, args.steps + 1):
         optimizer.zero_grad(set_to_none=True)
-        accumulated = 0.0
+        accumulated = {name: 0.0 for name in LOSS_NAMES}
         for micro in range(args.gradient_accumulation):
             try:
                 batch = next(iterator)
@@ -248,7 +290,6 @@ def main():
                 iterator = iter(loader)
                 batch = next(iterator)
             rgb = batch["rgb"].to(device)
-            b, t = rgb.shape[:2]
             with (
                 torch.no_grad(),
                 torch.autocast("cuda", dtype=torch.bfloat16, enabled=args.precision == "bf16"),
@@ -262,20 +303,25 @@ def main():
             )
             with sync:
                 with torch.autocast("cuda", dtype=torch.bfloat16, enabled=args.precision == "bf16"):
-                    loss = renderer_flow_loss(
+                    losses = renderer_training_losses(
                         model,
+                        codec,
                         latent,
                         conditions,
+                        rgb,
+                        batch["pixel_region_mask"].to(device),
                         region_weight=batch["region_weight"].to(device),
+                        **loss_kwargs,
                     )
-                    loss = loss / args.gradient_accumulation
+                    loss = losses["total_loss"] / args.gradient_accumulation
                 if not torch.isfinite(loss):
                     raise FloatingPointError(f"non-finite M3 loss at step {step}")
                 loss.backward()
-            accumulated += float(loss.detach())
+            for name in LOSS_NAMES:
+                accumulated[name] += float(losses[name].detach()) / args.gradient_accumulation
         torch.nn.utils.clip_grad_norm_(raw_model.parameters(), 1.0)
         optimizer.step()
-        reduced = torch.tensor(accumulated, device=device)
+        reduced = torch.tensor([accumulated[name] for name in LOSS_NAMES], device=device)
         if world > 1:
             dist.all_reduce(reduced)
             reduced /= world
@@ -297,7 +343,8 @@ def main():
                 memory_by_rank = local_memory[None]
         if rank == 0 and log_now:
             train_log = {
-                "train/flow_loss": reduced.item(),
+                **{f"train/{name}": float(reduced[index])
+                   for index, name in enumerate(LOSS_NAMES)},
                 "train/learning_rate": optimizer.param_groups[0]["lr"],
                 "train/cuda_memory_allocated_max_gib": float(memory_by_rank[:, 0].max()),
                 "train/cuda_peak_allocated_max_gib": float(memory_by_rank[:, 1].max()),
@@ -308,7 +355,10 @@ def main():
                 for index, values in enumerate(memory_by_rank)
             )
             print(
-                f"step={step} loss={reduced.item():.6f} "
+                f"step={step} loss={train_log['train/total_loss']:.6f} "
+                f"flow={train_log['train/flow_loss']:.6f} "
+                f"entity_l1={train_log['train/entity_pixel_l1']:.6f} "
+                f"health_l1={train_log['train/health_pixel_l1']:.6f} "
                 f"peak_reserved_max_gib={train_log['train/cuda_peak_reserved_max_gib']:.2f} "
                 f"{memory_text}",
                 flush=True,
@@ -328,25 +378,36 @@ def main():
                     ):
                         latent = codec.encode(rgb)
                         condition = {k: v.to(device) for k, v in val["conditions"].items()}
-                        values.append(
-                            renderer_flow_loss(
-                                raw_model,
-                                latent,
-                                condition,
-                                region_weight=val["region_weight"].to(device),
-                            )
+                        val_losses = renderer_training_losses(
+                            raw_model,
+                            codec,
+                            latent,
+                            condition,
+                            rgb,
+                            val["pixel_region_mask"].to(device),
+                            region_weight=val["region_weight"].to(device),
+                            generator=torch.Generator(device=device).manual_seed(
+                                args.seed + number
+                            ),
+                            **loss_kwargs,
                         )
+                        values.append(torch.stack([val_losses[name] for name in LOSS_NAMES]))
             metric = (
-                torch.stack(values).mean() if values else torch.tensor(float("nan"), device=device)
+                torch.stack(values).mean(0)
+                if values
+                else torch.full((len(LOSS_NAMES),), float("nan"), device=device)
             )
             if world > 1:
                 dist.all_reduce(metric)
                 metric /= world
             if rank == 0:
+                val_metrics = {
+                    name: float(metric[index]) for index, name in enumerate(LOSS_NAMES)
+                }
                 with (output / "validation.jsonl").open("a") as handle:
-                    handle.write(json.dumps({"step": step, "flow_loss": float(metric)}) + "\n")
+                    handle.write(json.dumps({"step": step, **val_metrics}) + "\n")
                 if run:
-                    run.log({"val/flow_loss": float(metric)}, step=step)
+                    run.log({f"val/{name}": value for name, value in val_metrics.items()}, step=step)
             raw_model.train()
         visualize = bool(
             args.val_window_index
