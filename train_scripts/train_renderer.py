@@ -53,6 +53,13 @@ def main():
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--window-index")
     parser.add_argument("--val-window-index")
+    parser.add_argument("--health-focus-index")
+    parser.add_argument(
+        "--health-focus-oversample",
+        type=int,
+        default=1,
+        help="Total sampling multiplicity for windows containing a non-full-health target",
+    )
     parser.add_argument("--resume")
     parser.add_argument("--context-frames", type=int, default=65)
     parser.add_argument("--cache-frames", type=int, default=32)
@@ -83,12 +90,13 @@ def main():
     parser.add_argument(
         "--pixel-loss-frames",
         type=int,
-        default=1,
-        help="Random future frames decoded per target view and training step",
+        default=2,
+        help="Entity-rich and HP-informative future frames decoded per target view",
     )
-    parser.add_argument("--entity-pixel-l1-weight", type=float, default=0.1)
-    parser.add_argument("--entity-pixel-edge-weight", type=float, default=0.05)
-    parser.add_argument("--health-pixel-l1-weight", type=float, default=0.2)
+    parser.add_argument("--entity-pixel-l1-weight", type=float, default=0.5)
+    parser.add_argument("--entity-pixel-edge-weight", type=float, default=0.2)
+    parser.add_argument("--health-pixel-l1-weight", type=float, default=1.0)
+    parser.add_argument("--damaged-health-upweight", type=float, default=4.0)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default="cuda")
@@ -120,11 +128,16 @@ def main():
         parser.error("steps, save interval, anchors and batch size must be positive")
     if not 1 <= args.pixel_loss_frames < args.context_frames:
         parser.error("pixel-loss-frames must be within the future-frame count")
+    if args.health_focus_oversample < 1:
+        parser.error("health-focus-oversample must be positive")
+    if args.health_focus_oversample > 1 and not args.health_focus_index:
+        parser.error("health-focus-oversample above 1 requires --health-focus-index")
     if min(
         args.latent_entity_region_upweight,
         args.entity_pixel_l1_weight,
         args.entity_pixel_edge_weight,
         args.health_pixel_l1_weight,
+        args.damaged_health_upweight,
     ) < 0:
         parser.error("region and pixel loss weights must be nonnegative")
     world = int(os.environ.get("WORLD_SIZE", "1"))
@@ -153,6 +166,8 @@ def main():
         window_index=args.window_index,
         targets_per_window=args.target_views_per_window,
         entity_region_upweight=args.latent_entity_region_upweight,
+        health_focus_index=args.health_focus_index,
+        health_focus_oversample=args.health_focus_oversample,
     )
     sampler = (
         DistributedSampler(dataset, num_replicas=world, rank=rank, shuffle=True, seed=args.seed)
@@ -276,6 +291,7 @@ def main():
         "entity_pixel_l1_weight": args.entity_pixel_l1_weight,
         "entity_pixel_edge_weight": args.entity_pixel_edge_weight,
         "health_pixel_l1_weight": args.health_pixel_l1_weight,
+        "damaged_health_upweight": args.damaged_health_upweight,
     }
     for step in range(start_step + 1, args.steps + 1):
         optimizer.zero_grad(set_to_none=True)

@@ -94,6 +94,6 @@ def test_probe_uses_real_cached_64_frame_rollout(tmp_path):
     metrics = render_probe(
         model, FakeCodec(), sample, tmp_path / "rollout.mp4", seed=7, denoising_steps=1
     )
-    assert set(metrics) == {"l1", "psnr"}
+    assert set(metrics) == {"l1", "psnr", "entity_l1", "health_l1"}
     assert (tmp_path / "rollout.mp4").stat().st_size > 0
     assert model.core.kv_caches is None

@@ -12,6 +12,7 @@ from plot.training.renderer_trainer import (
     renderer_flow_loss,
     renderer_pixel_losses,
     renderer_training_losses,
+    select_renderer_pixel_frames,
     slice_conditions,
 )
 
@@ -252,6 +253,15 @@ def test_continuous_dataset_preserves_state_time_and_splits(tmp_path, monkeypatc
         image_size=(4,4), latent_size=(4,4), entity_region_upweight=0,
     )[0]
     assert uniform['region_weight'].min() == uniform['region_weight'].max() == 1
+    focus_index = tmp_path / 'health_focus.pt'
+    torch.save({'context_frames': 17, 'split': 'train',
+                'rows': torch.tensor([[0, 0, 0]])}, focus_index)
+    focused = module.TextAgentRendererDataset(
+        tmp_path, BlockVocabulary((0,7)), context_frames=17,
+        image_size=(4,4), latent_size=(4,4),
+        health_focus_index=focus_index, health_focus_oversample=3,
+    )
+    assert len(focused) == 4  # two ordinary targets plus two extra copies of target zero
     with pytest.raises(ValueError,match='no accepted'):
         module.TextAgentRendererDataset(tmp_path,BlockVocabulary((0,7)),split='test',context_frames=17)
 
@@ -316,6 +326,22 @@ def test_full_resolution_entity_and_health_losses_are_differentiable():
     assert losses['entity_pixel_edge'] > 0
     sum(losses.values()).backward()
     assert predicted.grad.abs().sum() > 0
+
+
+def test_pixel_frame_selection_includes_minimum_target_health():
+    mask = torch.zeros(2, 5, 1, 4, 4, dtype=torch.bool)
+    mask[:, 2, :, :3, :3] = True
+    hp = torch.full((2, 5, 2), 20.0)
+    hp[0, 3:, 1] = 12
+    target = torch.tensor([1, 0])
+    indices, target_hp = select_renderer_pixel_frames(
+        mask, frames_per_sample=2, hp=hp, target_agent=target,
+        generator=torch.Generator().manual_seed(3),
+    )
+    assert indices.shape == (2, 2)
+    assert indices[0, 1].item() in {3, 4}
+    assert 1 <= indices[1, 1].item() < 5
+    torch.testing.assert_close(target_hp[0], hp[0, :, 1])
 
 
 def test_combined_renderer_loss_can_disable_pixel_decoder():

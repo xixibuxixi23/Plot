@@ -85,12 +85,16 @@ def incoming_actions(actions, start, length):
 class TextAgentRendererDataset(Dataset):
     def __init__(self, root, vocabulary, *, split="train", context_frames=65,
                  stride=8, image_size=(360, 640), latent_size=(36, 64), max_agents=8,
-                 window_index=None, targets_per_window=1, entity_region_upweight=4.0):
+                 window_index=None, targets_per_window=1, entity_region_upweight=4.0,
+                 health_focus_index=None, health_focus_oversample=1):
         if context_frames < 9 or (context_frames - 1) % 8 or stride < 1:
             raise ValueError("context_frames must be 1+8*k; stride must be positive")
         if targets_per_window < 1:
             raise ValueError("targets_per_window must be positive")
+        if health_focus_oversample < 1:
+            raise ValueError("health_focus_oversample must be positive")
         self.targets_per_window = int(targets_per_window)
+        self.health_focus_targets = set()
         if entity_region_upweight < 0:
             raise ValueError("entity_region_upweight must be nonnegative")
         self.entity_region_upweight = float(entity_region_upweight)
@@ -116,6 +120,9 @@ class TextAgentRendererDataset(Dataset):
                 raise ValueError("M3 window index is empty")
             if self.targets_per_window > 1:
                 self.index = self._group_target_windows(self.index, self.targets_per_window)
+            self._configure_health_focus(
+                health_focus_index, int(health_focus_oversample), context_frames, split
+            )
             return
         for path in sorted(Path(root).rglob("manifest.json")):
             manifest = json.loads(path.read_text())
@@ -156,6 +163,31 @@ class TextAgentRendererDataset(Dataset):
             raise ValueError("no accepted continuous M3 windows with valid HP found")
         if self.targets_per_window > 1:
             self.index = self._group_target_windows(self.index, self.targets_per_window)
+        self._configure_health_focus(
+            health_focus_index, int(health_focus_oversample), context_frames, split
+        )
+
+    def _configure_health_focus(self, path, oversample, context_frames, split):
+        if path is None:
+            if oversample != 1:
+                raise ValueError("health_focus_oversample requires health_focus_index")
+            return
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+        if payload.get("context_frames") != context_frames or payload.get("split") != split:
+            raise ValueError("health focus index context/split does not match the dataset")
+        rows = torch.as_tensor(payload["rows"], dtype=torch.int64)
+        if rows.ndim != 2 or rows.shape[1] != 3:
+            raise ValueError("health focus rows must be [N,3] episode/start/target")
+        self.health_focus_targets = {tuple(map(int, row)) for row in rows.tolist()}
+        if oversample > 1:
+            focused = [row for row in self.index if self._is_health_focus_window(row)]
+            self.index.extend(focused * (oversample - 1))
+
+    def _is_health_focus_window(self, row):
+        episode, start, target = row
+        targets = target if isinstance(target, (tuple, list)) else (target,)
+        return any((int(episode), int(start), int(slot)) in self.health_focus_targets
+                   for slot in targets)
 
     @staticmethod
     def _group_target_windows(index, required):
@@ -196,6 +228,7 @@ class TextAgentRendererDataset(Dataset):
         instance.context_frames = int(context_frames)
         instance.image_size, instance.latent_size = image_size, latent_size
         instance.entity_region_upweight = 4.0
+        instance.health_focus_targets = set()
         instance.episodes = [(path, manifest)]
         instance.index = [(0, int(start), int(target))]
         metadata = json.loads((path / "training_metadata.json").read_text())
@@ -208,7 +241,14 @@ class TextAgentRendererDataset(Dataset):
     def __getitem__(self, index):
         episode_id, start, target = self.index[index]
         if isinstance(target, (tuple, list)):
-            order = torch.randperm(len(target))[: self.targets_per_window].tolist()
+            focused = [i for i, slot in enumerate(target)
+                       if (int(episode_id), int(start), int(slot)) in self.health_focus_targets]
+            order = []
+            if focused:
+                order.append(focused[torch.randint(len(focused), ()).item()])
+            remaining = [i for i in range(len(target)) if i not in order]
+            shuffled = torch.randperm(len(remaining)).tolist()
+            order.extend(remaining[i] for i in shuffled[: self.targets_per_window - len(order)])
             return [self._read_target(episode_id, start, target[i]) for i in order]
         return self._read_target(episode_id, start, target)
 

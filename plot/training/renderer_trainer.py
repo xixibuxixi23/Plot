@@ -73,6 +73,64 @@ def _masked_edge_l1(prediction, target, mask):
     return (_masked_mean(dx.abs(), mask_x) + _masked_mean(dy.abs(), mask_y)) / 2
 
 
+def select_renderer_pixel_frames(
+    pixel_region_mask,
+    *,
+    frames_per_sample,
+    hp=None,
+    target_agent=None,
+    generator=None,
+    full_health=20.0,
+):
+    """Select an entity-rich frame and, when possible, a damaged-HP frame."""
+    if pixel_region_mask.ndim != 5 or pixel_region_mask.shape[2] != 1:
+        raise ValueError("pixel_region_mask must be [B,T,1,H,W]")
+    batch, frames = pixel_region_mask.shape[:2]
+    if not 1 <= frames_per_sample < frames:
+        raise ValueError("frames_per_sample must be within the future-frame count")
+
+    coverage = pixel_region_mask[:, 1:].flatten(2).sum(-1).float()
+    entity_frame = torch.multinomial(
+        coverage + 1e-3, 1, replacement=True, generator=generator
+    ) + 1
+    random_frame = torch.randint(
+        1, frames, (batch, 1), device=pixel_region_mask.device, generator=generator
+    )
+    health_frame = random_frame
+    has_damage = torch.zeros(batch, dtype=torch.bool, device=pixel_region_mask.device)
+    target_hp = None
+    if hp is not None or target_agent is not None:
+        if hp is None or target_agent is None:
+            raise ValueError("hp and target_agent must be supplied together")
+        if hp.ndim != 3 or hp.shape[:2] != (batch, frames):
+            raise ValueError("hp must be [B,T,A] and align with the masks")
+        if target_agent.shape != (batch,):
+            raise ValueError("target_agent must be [B]")
+        gather = target_agent.long()[:, None, None].expand(-1, frames, 1)
+        target_hp = hp.gather(2, gather).squeeze(2)
+        future_hp = target_hp[:, 1:]
+        has_damage = future_hp.min(1).values < full_health - 1e-3
+        minimum = future_hp.min(1, keepdim=True).values
+        minimum_frames = (future_hp <= minimum + 1e-3).float()
+        sampled_minimum = torch.multinomial(
+            minimum_frames, 1, replacement=True, generator=generator
+        ) + 1
+        health_frame = torch.where(has_damage[:, None], sampled_minimum, random_frame)
+
+    if frames_per_sample == 1:
+        indices = torch.where(has_damage[:, None], health_frame, entity_frame)
+    else:
+        extras = torch.randint(
+            1,
+            frames,
+            (batch, frames_per_sample - 2),
+            device=pixel_region_mask.device,
+            generator=generator,
+        )
+        indices = torch.cat((entity_frame, health_frame, extras), dim=1)
+    return indices, target_hp
+
+
 def renderer_pixel_losses(
     codec,
     clean_prediction,
@@ -81,6 +139,9 @@ def renderer_pixel_losses(
     *,
     frames_per_sample=1,
     generator=None,
+    hp=None,
+    target_agent=None,
+    damaged_health_upweight=4.0,
     health_box=(190 / 640, 300 / 360, 314 / 640, 322 / 360),
 ):
     """Full-resolution entity and Minecraft heart-bar losses.
@@ -104,12 +165,14 @@ def renderer_pixel_losses(
     ):
         raise ValueError("health_box must be normalized (x0,y0,x1,y1)")
 
+    if damaged_health_upweight < 0:
+        raise ValueError("damaged_health_upweight must be nonnegative")
     batch = clean_prediction.shape[0]
-    frame_indices = torch.randint(
-        1,
-        clean_prediction.shape[1],
-        (batch, frames_per_sample),
-        device=clean_prediction.device,
+    frame_indices, target_hp = select_renderer_pixel_frames(
+        pixel_region_mask,
+        frames_per_sample=frames_per_sample,
+        hp=hp,
+        target_agent=target_agent,
         generator=generator,
     )
     batch_indices = torch.arange(batch, device=clean_prediction.device)[:, None]
@@ -136,6 +199,11 @@ def renderer_pixel_losses(
     top, bottom = int(round(y0 * height)), int(round(y1 * height))
     health_mask = torch.zeros_like(selected_mask, dtype=torch.bool)
     health_mask[..., top:bottom, left:right] = True
+    if target_hp is not None:
+        selected_hp = target_hp[batch_indices, frame_indices].reshape(-1, 1, 1, 1)
+        health_mask = health_mask.float() * (
+            1 + damaged_health_upweight * (selected_hp < 20 - 1e-3).float()
+        )
     health_l1 = _masked_mean((decoded - selected_target).abs(), health_mask)
     return {
         "entity_pixel_l1": entity_l1,
@@ -153,10 +221,11 @@ def renderer_training_losses(
     pixel_region_mask,
     *,
     region_weight=None,
-    frames_per_sample=1,
-    entity_pixel_l1_weight=0.1,
-    entity_pixel_edge_weight=0.05,
-    health_pixel_l1_weight=0.2,
+    frames_per_sample=2,
+    entity_pixel_l1_weight=0.5,
+    entity_pixel_edge_weight=0.2,
+    health_pixel_l1_weight=1.0,
+    damaged_health_upweight=4.0,
     generator=None,
 ):
     """Combine latent flow matching with sparse full-resolution supervision."""
@@ -185,6 +254,9 @@ def renderer_training_losses(
             pixel_region_mask,
             frames_per_sample=frames_per_sample,
             generator=generator,
+            hp=conditions.get("hp"),
+            target_agent=conditions.get("target_agent"),
+            damaged_health_upweight=damaged_health_upweight,
         )
     else:
         flow_loss = result

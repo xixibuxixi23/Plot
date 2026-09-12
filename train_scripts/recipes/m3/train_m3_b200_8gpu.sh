@@ -19,6 +19,8 @@ torchrun --standalone --nproc_per_node="$nproc" train_scripts/train_renderer.py 
   --dataset-root "$PLOT_DATASET_ROOT" \
   --window-index derived/m3/train_c65.pt \
   --val-window-index derived/m3/val_id_c65.pt \
+  --health-focus-index derived/m3/train_c65_health_focus.pt \
+  --health-focus-oversample "${HEALTH_FOCUS_OVERSAMPLE:-5}" \
   --vocabulary derived/common/block_vocabulary.json \
   --pixel-vae checkpoints/pixel_vae/model.safetensors \
   --backbone-checkpoint checkpoints/m3_backbone/model.safetensors \
@@ -27,10 +29,11 @@ torchrun --standalone --nproc_per_node="$nproc" train_scripts/train_renderer.py 
   --context-frames 65 --cache-frames 32 --target-views-per-window 2 \
   --batch-size "${BATCH_SIZE:-1}" --steps "${STEPS:-10000}" \
   --latent-entity-region-upweight "${LATENT_ENTITY_REGION_UPWEIGHT:-0}" \
-  --pixel-loss-frames "${PIXEL_LOSS_FRAMES:-1}" \
-  --entity-pixel-l1-weight "${ENTITY_PIXEL_L1_WEIGHT:-0.1}" \
-  --entity-pixel-edge-weight "${ENTITY_PIXEL_EDGE_WEIGHT:-0.05}" \
-  --health-pixel-l1-weight "${HEALTH_PIXEL_L1_WEIGHT:-0.2}" \
+  --pixel-loss-frames "${PIXEL_LOSS_FRAMES:-2}" \
+  --entity-pixel-l1-weight "${ENTITY_PIXEL_L1_WEIGHT:-0.5}" \
+  --entity-pixel-edge-weight "${ENTITY_PIXEL_EDGE_WEIGHT:-0.2}" \
+  --health-pixel-l1-weight "${HEALTH_PIXEL_L1_WEIGHT:-1.0}" \
+  --damaged-health-upweight "${DAMAGED_HEALTH_UPWEIGHT:-4}" \
   --save-every "${SAVE_EVERY:-1000}" \
   --validate-every "${VALIDATE_EVERY:-1000}" \
   --visualize-every "${VISUALIZE_EVERY:-1000}" \

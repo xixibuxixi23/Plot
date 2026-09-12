@@ -184,4 +184,20 @@ def render_probe(
     write_comparison_video(output_path, truth, prediction, weight)
     error = (prediction.float() - truth.float()).abs()
     mse = error.square().mean().clamp_min(1e-12)
-    return {"l1": float(error.mean()), "psnr": float(-10 * torch.log10(mse))}
+    if "pixel_region_mask" in sample:
+        entity_mask = sample["pixel_region_mask"][0, 1:65].to(device).float()
+    else:
+        entity_mask = (weight > 1).to(device).float()
+    entity_l1 = (error * entity_mask).sum() / (
+        entity_mask.sum().clamp_min(1) * error.shape[1]
+    )
+    height, width = error.shape[-2:]
+    left, right = round(190 / 640 * width), round(314 / 640 * width)
+    top, bottom = round(300 / 360 * height), round(322 / 360 * height)
+    health_l1 = error[..., top:bottom, left:right].mean()
+    return {
+        "l1": float(error.mean()),
+        "psnr": float(-10 * torch.log10(mse)),
+        "entity_l1": float(entity_l1),
+        "health_l1": float(health_l1),
+    }

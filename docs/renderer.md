@@ -62,18 +62,24 @@ torchrun --standalone --nproc_per_node=8 train_scripts/train_renderer.py \
 ```
 
 The entry point encodes RGB with a frozen VAE and predicts all 64 unknown frames
-in one causal forward. By default, each target view randomly selects one future
-frame, reconstructs its clean latent estimate, and decodes it through the frozen
-VAE with gradients retained to M3. The auxiliary objective contains RGB L1 in
+in one causal forward. By default, each target view selects an entity-rich frame
+and an HP-informative frame, reconstructs their clean latent estimates, and
+decodes them through the frozen VAE with gradients retained to M3. The auxiliary
+objective contains RGB L1 in
 the exact full-resolution entity mask, spatial-gradient L1 around entity edges,
 and RGB L1 over the Minecraft heart bar (`x=190:314, y=300:322` at 640x360).
 The default objective is
-`flow + 0.1*entity_L1 + 0.05*entity_edge + 0.2*health_L1`; the VAE stays frozen.
+`flow + 0.5*entity_L1 + 0.2*entity_edge + 1.0*health_L1`; the VAE stays frozen.
+Within a batch, damaged heart bars receive five times the weight of full-health
+bars. A separately generated health-focus index can repeat windows containing a
+non-full-health target and guarantees that target is one of the selected views.
 The old latent entity-region upweight is disabled by default so that it does not
 double-count the new pixel objective. Configure these terms with
 `--pixel-loss-frames`, `--entity-pixel-l1-weight`,
 `--entity-pixel-edge-weight`, `--health-pixel-l1-weight`, and
-`--latent-entity-region-upweight`. Checkpoints save model/optimizer/config state.
+`--latent-entity-region-upweight`. Use `scripts/build_m3_health_focus_index.py`,
+then pass `--health-focus-index` and `--health-focus-oversample 5` for balanced
+heart-state training. Checkpoints save model/optimizer/config state.
 Each source batch row is one episode
 window; its two randomly selected target views are flattened before VAE and M3
 execution. Only accepted `train` manifests are read;
