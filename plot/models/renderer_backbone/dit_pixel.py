@@ -7,7 +7,7 @@ References:
 
 
 from dataclasses import dataclass, field
-from math import prod
+from math import prod, sqrt
 from typing import Optional, Tuple
 
 import torch
@@ -359,6 +359,27 @@ class SpatioTemporalPixelDiTBlock(nn.Module):
             return x, kv_candidate
         return x
 
+
+class AlignedAppearanceAdapter(nn.Module):
+    """Pointwise masked reference fusion after geometric texture alignment."""
+
+    def __init__(self, hidden_size: int, gate_dim: int = 128, value_dim: int = 256):
+        super().__init__()
+        self.x_norm = nn.LayerNorm(hidden_size)
+        self.reference_norm = nn.LayerNorm(hidden_size)
+        self.to_query = nn.Linear(hidden_size, gate_dim, bias=False)
+        self.to_key = nn.Linear(hidden_size, gate_dim, bias=False)
+        self.to_value = nn.Linear(hidden_size, value_dim)
+        self.to_output = nn.Linear(value_dim, hidden_size)
+        self.scale = 1 / sqrt(gate_dim)
+
+    def forward(self, x, reference, mask):
+        query = self.to_query(self.x_norm(x))
+        key = self.to_key(self.reference_norm(reference))
+        agreement = torch.sigmoid((query * key).sum(dim=-1, keepdim=True) * self.scale)
+        value = F.silu(self.to_value(self.reference_norm(reference)))
+        return self.to_output(value) * agreement * mask
+
 class PixelFinalLayer(nn.Module):
     """
     The final layer of pixel DiT.
@@ -643,6 +664,7 @@ class FrameDepthStackPixelDitDenoiserArgs:
     actor_condition_dim : int = 0
     deep_condition_reinjection : bool = False
     hud_condition_dim : int = 0
+    appearance_condition_dim : int = 0
     context_window_size : int = 16
     cache_window_size : int = 32
     is_causal : bool = True
@@ -690,6 +712,7 @@ class FrameDepthStackPixelDiT(nn.Module):
             actor_condition_dim=0,
             deep_condition_reinjection=False,
             hud_condition_dim=0,
+            appearance_condition_dim=0,
             context_window_size=32,
             cache_window_size=32,
             is_causal=True,
@@ -788,6 +811,18 @@ class FrameDepthStackPixelDiT(nn.Module):
         else:
             self.hud_condition_embedder = None
             self.condition_reinjectors = None
+        if appearance_condition_dim > 0:
+            self.appearance_condition_embedder = nn.Sequential(
+                nn.Conv2d(appearance_condition_dim, 64, kernel_size=3, padding=1),
+                nn.SiLU(),
+                nn.Conv2d(64, hidden_size, kernel_size=patch_size, stride=patch_size),
+            )
+            self.appearance_reinjectors = nn.ModuleList(
+                [AlignedAppearanceAdapter(hidden_size) for _ in range(depth)]
+            )
+        else:
+            self.appearance_condition_embedder = None
+            self.appearance_reinjectors = None
 
         #spatial encodings
         self.pixel_spatial_emb = RotaryEmbedding(
@@ -874,6 +909,10 @@ class FrameDepthStackPixelDiT(nn.Module):
             for adapter in self.condition_reinjectors:
                 nn.init.constant_(adapter[-1].weight, 0)
                 nn.init.constant_(adapter[-1].bias, 0)
+        if self.appearance_reinjectors is not None:
+            for adapter in self.appearance_reinjectors:
+                nn.init.constant_(adapter.to_output.weight, 0)
+                nn.init.constant_(adapter.to_output.bias, 0)
 
         # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
         w = self.x_embedder.proj.weight.data
@@ -1062,6 +1101,32 @@ class FrameDepthStackPixelDiT(nn.Module):
                 )
 
         x = rearrange(x, "(b t) h w d -> b t h w d", b=B, t=T)
+        appearance_tokens = None
+        appearance_mask = None
+        if self.appearance_condition_embedder is not None:
+            appearance_condition = external_cond.get("appearance_spatial_condition")
+            expected = (
+                B,
+                T,
+                self.appearance_condition_embedder[0].in_channels,
+                H,
+                W,
+            )
+            if appearance_condition is None or tuple(appearance_condition.shape) != expected:
+                raise ValueError(f"appearance_spatial_condition must have shape {expected}")
+            appearance_flat = rearrange(
+                appearance_condition, "b t c h w -> (b t) c h w"
+            ).to(x.dtype)
+            appearance_tokens = self.appearance_condition_embedder(appearance_flat)
+            appearance_tokens = rearrange(
+                appearance_tokens, "(b t) d h w -> b t h w d", b=B, t=T
+            )
+            appearance_mask = F.avg_pool2d(
+                appearance_flat[:, 3:4], self.patch_size, self.patch_size
+            ).clamp(0, 1)
+            appearance_mask = rearrange(
+                appearance_mask, "(b t) c h w -> b t h w c", b=B, t=T
+            )
         # embed noise steps
         t = rearrange(t, "b t -> (b t)")
         c = self.t_embedder(t)  # (N, D)
@@ -1126,6 +1191,21 @@ class FrameDepthStackPixelDiT(nn.Module):
         for i, block in enumerate(self.blocks):
             if self.condition_reinjectors is not None:
                 x = x + self.condition_reinjectors[i](condition_tokens)
+            if self.appearance_reinjectors is not None:
+                adapter = self.appearance_reinjectors[i]
+                if self.gradient_checkpointing and self.training:
+                    appearance_delta = checkpoint(
+                        lambda x_, reference_, mask_, adapter_=adapter: adapter_(
+                            x_, reference_, mask_
+                        ),
+                        x,
+                        appearance_tokens,
+                        appearance_mask,
+                        use_reentrant=False,
+                    )
+                else:
+                    appearance_delta = adapter(x, appearance_tokens, appearance_mask)
+                x = x + appearance_delta
             cache = self.kv_caches[i] if self.kv_caches else None
             if self.gradient_checkpointing and self.training and cache is None:
                 x = checkpoint(

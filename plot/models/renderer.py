@@ -9,7 +9,10 @@ import torch.nn.functional as F
 
 from .renderer_backbone.dit_pixel import FrameDepthStackPixelDiT
 from .renderer_backbone.render_condition import MultiAgentRenderConditionEncoder
-from .renderer_backbone.player_spatial_condition import PlayerSpatialCondition
+from .renderer_backbone.player_spatial_condition import (
+    PlayerSpatialCondition,
+    ViewAwarePlayerAppearance,
+)
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,7 @@ class RendererArgs:
     gradient_checkpointing: bool = True
     gpu_rasterizer: bool = True
     deep_condition_reinjection: bool = False
+    view_aware_appearance: bool = False
 
 
 class ResidentConditionEncoder(MultiAgentRenderConditionEncoder):
@@ -99,6 +103,11 @@ class Renderer(nn.Module):
         self.voxel_embedder = nn.Embedding(cfg.num_block_classes + 1, cfg.voxel_channels)
         self.resident_encoder = ResidentConditionEncoder(cfg)
         self.spatial_encoder = PlayerSpatialCondition(128, cfg.actor_channels, cfg.input_h, cfg.input_w)
+        self.appearance_spatial_encoder = (
+            ViewAwarePlayerAppearance(cfg.input_h, cfg.input_w)
+            if cfg.view_aware_appearance
+            else None
+        )
         self.core = FrameDepthStackPixelDiT(
             input_h=cfg.input_h, input_w=cfg.input_w, in_channels=cfg.in_channels,
             hidden_size=cfg.hidden_size, depth=cfg.depth, num_heads=cfg.num_heads,
@@ -108,6 +117,11 @@ class Renderer(nn.Module):
             voxel_dim=48, is_causal=True, use_condition_mask=True,
             deep_condition_reinjection=cfg.deep_condition_reinjection,
             hud_condition_dim=3 if cfg.deep_condition_reinjection else 0,
+            appearance_condition_dim=(
+                self.appearance_spatial_encoder.output_channels
+                if self.appearance_spatial_encoder is not None
+                else 0
+            ),
             gradient_checkpointing=cfg.gradient_checkpointing,
             aggregation_config={} if cfg.gpu_rasterizer else None)
 
@@ -130,6 +144,10 @@ class Renderer(nn.Module):
             "condition_mask": cond["condition_mask"],
             "action_prefix_mask": cond["action_prefix_mask"],
         }
+        if self.appearance_spatial_encoder is not None:
+            result["appearance_spatial_condition"] = self.appearance_spatial_encoder(
+                spatial_cond, target
+            )
         if self.cfg.deep_condition_reinjection:
             target_hp = self.select(cond["hp"], target) / 20.0
             target_hp_delta = self.select(cond["event_cues"], target)[..., 3] / 20.0

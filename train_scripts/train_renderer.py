@@ -70,6 +70,16 @@ def main():
         action="store_true",
         help="Reinject aligned raster, actor, action, resident state, and HUD conditions at every DiT block",
     )
+    parser.add_argument(
+        "--view-aware-appearance",
+        action="store_true",
+        help="Warp dense four-view resident references into masked per-block appearance adapters",
+    )
+    parser.add_argument(
+        "--freeze-base-for-appearance",
+        action="store_true",
+        help="Stage-one training: update only the new dense appearance modules",
+    )
     parser.add_argument("--context-frames", type=int, default=65)
     parser.add_argument("--cache-frames", type=int, default=32)
     parser.add_argument("--hidden-size", type=int, default=1024)
@@ -125,6 +135,10 @@ def main():
     args = parser.parse_args()
     if sum(bool(path) for path in (args.resume, args.warm_start, args.backbone_checkpoint)) > 1:
         parser.error("--resume, --warm-start, and --backbone-checkpoint are mutually exclusive")
+    if args.freeze_base_for_appearance and not args.view_aware_appearance:
+        parser.error("--freeze-base-for-appearance requires --view-aware-appearance")
+    if args.freeze_base_for_appearance and args.resume:
+        parser.error("use --warm-start for staged appearance training")
     if (
         min(
             args.steps,
@@ -205,6 +219,7 @@ def main():
         condition_dim=args.condition_dim,
         actor_channels=args.actor_channels,
         deep_condition_reinjection=args.deep_condition_reinjection,
+        view_aware_appearance=args.view_aware_appearance,
     )
     with torch.cuda.device(device):
         raw_model = Renderer(cfg).to(device).train()
@@ -213,7 +228,21 @@ def main():
         if rank == 0:
             print(json.dumps(report))
     codec = RendererCodec(load_weights(args.pixel_vae)).to(device).eval()
-    optimizer = torch.optim.AdamW(raw_model.parameters(), lr=args.lr)
+    if args.freeze_base_for_appearance:
+        for name, parameter in raw_model.named_parameters():
+            parameter.requires_grad_(
+                name.startswith((
+                    "core.appearance_condition_embedder.",
+                    "core.appearance_reinjectors.",
+                ))
+            )
+    trainable_parameters = [p for p in raw_model.parameters() if p.requires_grad]
+    optimizer = torch.optim.AdamW(trainable_parameters, lr=args.lr)
+    if rank == 0:
+        print(json.dumps({
+            "trainable_parameters": sum(p.numel() for p in trainable_parameters),
+            "total_parameters": sum(p.numel() for p in raw_model.parameters()),
+        }))
     start_step = 0
     if args.resume:
         checkpoint = torch.load(args.resume, map_location="cpu", weights_only=False)
@@ -226,6 +255,8 @@ def main():
         allowed_missing = (
             "core.hud_condition_embedder.",
             "core.condition_reinjectors.",
+            "core.appearance_condition_embedder.",
+            "core.appearance_reinjectors.",
         )
         invalid_missing = [
             key for key in incompatible.missing_keys

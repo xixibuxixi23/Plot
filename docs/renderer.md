@@ -102,6 +102,18 @@ and step number, starts a fresh optimizer, and rejects missing keys outside the
 new condition modules. `--resume` remains the strict model-and-optimizer path
 for an unchanged architecture.
 
+`--view-aware-appearance` preserves the four RGBA resident references as dense
+pixels. For every frame it selects and softly blends front/back/left/right from
+the source resident yaw, projects the chosen sprite into the target camera, and
+depth-composites overlapping residents. The resulting RGB, occupancy, inverse
+depth, local sprite coordinates, and view weights enter a masked appearance
+adapter at every DiT block. Each adapter compares the current video token with
+its geometrically aligned reference before injecting texture features. Its
+output is zero-initialized for an exact checkpoint warm start. For the first
+stage, `--freeze-base-for-appearance` trains only these new modules; combine it
+with latent entity-region weighting so the small resident regions are not
+overwhelmed by the background flow objective.
+
 The initial full configuration is 1024 width / 12 layers with a 32-frame
 inference cache. Training uses exactly 65 frames: frame zero is clean and all
 remaining frames receive independent flow timesteps and loss. These are pilot

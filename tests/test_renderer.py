@@ -6,6 +6,7 @@ import torch
 from plot.data.fill_dataset import BlockVocabulary
 from plot.data.renderer_dataset import incoming_actions, merge_observation_crops, raster_camera
 from plot.models.renderer import Renderer, RendererArgs
+from plot.models.renderer_backbone.player_spatial_condition import ViewAwarePlayerAppearance
 from plot.pipelines.renderer_pipeline import RendererMemoryBlock
 from plot.training.renderer_trainer import (
     RendererRollout,
@@ -88,12 +89,21 @@ def test_training_backward_and_supervision_only_masks():
 
 def test_deep_condition_reinjection_is_exact_warm_start_and_trainable():
     baseline = tiny_model().eval()
-    deep = Renderer(replace(baseline.cfg, deep_condition_reinjection=True)).eval()
+    deep = Renderer(replace(
+        baseline.cfg,
+        deep_condition_reinjection=True,
+        view_aware_appearance=True,
+    )).eval()
     incompatible = deep.load_state_dict(baseline.state_dict(), strict=False)
     assert not incompatible.unexpected_keys
     assert incompatible.missing_keys
     assert all(
-        key.startswith(("core.hud_condition_embedder.", "core.condition_reinjectors."))
+        key.startswith((
+            "core.hud_condition_embedder.",
+            "core.condition_reinjectors.",
+            "core.appearance_condition_embedder.",
+            "core.appearance_reinjectors.",
+        ))
         for key in incompatible.missing_keys
     )
 
@@ -120,6 +130,45 @@ def test_deep_condition_reinjection_is_exact_warm_start_and_trainable():
         and adapter[-1].weight.grad.abs().sum() > 0
         for adapter in deep.core.condition_reinjectors
     )
+    assert all(
+        adapter.to_output.weight.grad is not None
+        and adapter.to_output.weight.grad.abs().sum() > 0
+        for adapter in deep.core.appearance_reinjectors
+    )
+
+
+def test_view_aware_appearance_preserves_reference_pixels_and_selects_back_view():
+    renderer = ViewAwarePlayerAppearance(height=8, width=8)
+    b, t, a = 1, 1, 2
+    skins = torch.zeros(b, a, 4, 4, 16, 16)
+    colors = torch.tensor([
+        [1., 0., 0.],  # front
+        [0., 1., 0.],  # back
+        [0., 0., 1.],  # left
+        [1., 1., 0.],  # right
+    ])
+    skins[:, 1, :, :3] = colors[:, :, None, None]
+    skins[:, 1, :, 3] = 1
+    position = torch.tensor([[[[0., 0., 0.], [0., 3., 0.]]]])
+    camera_position = position.clone()
+    camera_position[..., 2] += 1.5
+    result = renderer({
+        "player_skin": skins,
+        "player_appearance_valid": torch.ones(b, a, 4, dtype=torch.bool),
+        "player_position": position,
+        "camera_position": camera_position,
+        "camera_direction": torch.tensor([[[[0., 1., 0.], [0., 1., 0.]]]]),
+        "camera": torch.full((b, t, a, 1), 1.2),
+        "yaw_pitch": torch.zeros(b, t, a, 2),
+        "player_valid": torch.ones(b, t, a, dtype=torch.bool),
+    }, torch.tensor([0]))
+    assert result.shape == (b, t, 11, 8, 8)
+    occupied = result[0, 0, 3] > .5
+    assert occupied.any()
+    occupancy = result[0, 0, 3][occupied]
+    assert (result[0, 0, 1][occupied] / occupancy).mean() > .99
+    assert result[0, 0, 0][occupied].mean() < .01
+    assert (result[0, 0, 8][occupied] / occupancy).mean() > .99
 
 
 def test_world_translation_does_not_change_resident_features_or_projection():
