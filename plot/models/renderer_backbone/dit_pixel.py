@@ -868,12 +868,12 @@ class FrameDepthStackPixelDiT(nn.Module):
         nn.init.constant_(self.final_layer.linear.weight, 0)
         nn.init.constant_(self.final_layer.linear.bias, 0)
 
-    def _initialize_kv_caches(self, batch_size=None):
+    def _initialize_kv_caches(self, batch_size=None, dtype=None):
         patched_pix_shape = self.x_embedder.grid_size
         H, W = patched_pix_shape
         head_dim = self.hidden_size // self.num_heads
         device = self.x_embedder.proj.weight.device
-        dtype = self.x_embedder.proj.weight.dtype
+        dtype = dtype or self.x_embedder.proj.weight.dtype
 
         if batch_size is not None:
             self.batch_size = batch_size
@@ -892,9 +892,9 @@ class FrameDepthStackPixelDiT(nn.Module):
             self.kv_caches.append(kv_cache)
         self.raster_cache = {"raster_cond": None, "global_start_idx": -1}
 
-    def init_kv_cache(self, batch_size):
-        """Allocate empty persistent caches for autoregressive rollout."""
-        self._initialize_kv_caches(batch_size=batch_size)
+    def init_kv_cache(self, batch_size, dtype=None):
+        """Allocate caches in the active inference dtype."""
+        self._initialize_kv_caches(batch_size=batch_size, dtype=dtype)
         return self.kv_caches
 
     def commit_kv_candidates(self, candidates, frame_index):

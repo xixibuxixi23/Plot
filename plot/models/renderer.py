@@ -167,8 +167,8 @@ class Renderer(nn.Module):
         compressed = F.adaptive_avg_pool1d(flattened, output_dim)
         return compressed.reshape(*pooled.shape[:-1], output_dim).detach()
 
-    def init_kv_cache(self, batch_size):
-        return self.core.init_kv_cache(batch_size)
+    def init_kv_cache(self, batch_size, dtype=None):
+        return self.core.init_kv_cache(batch_size, dtype=dtype)
 
     def set_kv_cache_start(self, frame_index):
         """Position an empty cache at an absolute episode frame."""

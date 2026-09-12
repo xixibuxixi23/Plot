@@ -155,25 +155,30 @@ def write_comparison_video(
 
 @torch.no_grad()
 def render_probe(
-    model, codec, sample: dict, output_path: str | Path, *, seed: int, denoising_steps: int = 20
+    model, codec, sample: dict, output_path: str | Path, *, seed: int,
+    denoising_steps: int = 20, precision: str = "bf16"
 ) -> dict:
-    """Run the deployment path: one known frame followed by eight cached chunks."""
+    """Run the deployment path in the configured training precision."""
+    if precision not in {"bf16", "fp32"}:
+        raise ValueError("precision must be bf16 or fp32")
     device = next(model.parameters()).device
     rgb = sample["rgb"][:, :65].to(device)
     conditions = {key: value.to(device) for key, value in sample["conditions"].items()}
     conditions = slice_conditions(conditions, 0, 65)
-    latent = codec.encode(rgb)
-    generator = torch.Generator(device=device).manual_seed(seed)
-    noise = torch.randn(
-        latent[:, 1:65].shape, device=device, dtype=latent.dtype, generator=generator
-    )
-    rollout = RendererRollout(model, denoising_steps=denoising_steps)
-    try:
-        rollout.start(latent[:, :1], slice_conditions(conditions, 0, 1))
-        predicted_latent = rollout.generate_64(noise, slice_conditions(conditions, 1, 65))
-        prediction = codec.decode(predicted_latent)[0]
-    finally:
-        model.clear_cache()
+    use_bf16 = precision == "bf16" and device.type == "cuda"
+    with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=use_bf16):
+        latent = codec.encode(rgb)
+        generator = torch.Generator(device=device).manual_seed(seed)
+        noise = torch.randn(
+            latent[:, 1:65].shape, device=device, dtype=latent.dtype, generator=generator
+        )
+        rollout = RendererRollout(model, denoising_steps=denoising_steps)
+        try:
+            rollout.start(latent[:, :1], slice_conditions(conditions, 0, 1))
+            predicted_latent = rollout.generate_64(noise, slice_conditions(conditions, 1, 65))
+            prediction = codec.decode(predicted_latent)[0]
+        finally:
+            model.clear_cache()
     truth = rgb[0, 1:65]
     weight = sample["region_weight"][0, 1:65]
     write_comparison_video(output_path, truth, prediction, weight)

@@ -275,3 +275,11 @@ def test_frozen_codec_rgb_latent_layout():
     assert latent.shape == (1,9,16,4,4) and rgb.shape == (1,9,3,40,40)
     assert 0 <= rgb.min() <= rgb.max() <= 1
     assert not latent.requires_grad and not codec.vae.training
+
+
+def test_kv_cache_uses_requested_inference_dtype():
+    model = tiny_model().eval()
+    model.init_kv_cache(1, dtype=torch.bfloat16)
+    assert all(cache["k"].dtype == torch.bfloat16 for cache in model.core.kv_caches)
+    assert all(cache["v"].dtype == torch.bfloat16 for cache in model.core.kv_caches)
+    model.clear_cache()

@@ -62,7 +62,7 @@ class RendererRollout:
         if first_latent.shape[1] != 1:
             raise ValueError("initialization requires exactly one completed observation")
         self.model.eval()
-        self.model.init_kv_cache(len(first_latent))
+        self.model.init_kv_cache(len(first_latent), dtype=first_latent.dtype)
         self.model.set_kv_cache_start(global_start_idx)
         self.last_policy_features = self._commit(first_latent, conditions, global_start_idx)
         self.next_frame = global_start_idx + 1

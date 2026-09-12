@@ -381,6 +381,7 @@ def main():
                             video_path,
                             seed=args.seed + probe_number,
                             denoising_steps=args.visualization_denoising_steps,
+                            precision=args.precision,
                         )
                         visual_log.update(
                             {f"visual/{probe.name}_{key}": value for key, value in metrics.items()}

@@ -109,7 +109,10 @@ class ClosedLoopPipeline:
     """
 
     def __init__(self, *, policy, transition, committer, renderer_rollout, codec,
-                 fill_pipeline, resident_ids, skins, appearance_valid, fov_x, device="cuda"):
+                 fill_pipeline, resident_ids, skins, appearance_valid, fov_x, device="cuda",
+                 precision="bf16"):
+        if precision not in {"bf16", "fp32"}:
+            raise ValueError("precision must be bf16 or fp32")
         self.policy, self.transition, self.committer = policy, transition, committer
         self.renderer_rollout, self.codec, self.fill_pipeline = renderer_rollout, codec, fill_pipeline
         self.resident_ids = tuple(resident_ids)
@@ -118,6 +121,11 @@ class ClosedLoopPipeline:
         if self.fov_x.shape != (len(self.resident_ids),):
             raise ValueError("closed-loop fov_x must contain one value per resident")
         self.device = torch.device(device)
+        self.precision = precision
+        self.renderer_dtype = (
+            torch.bfloat16 if precision == "bf16" and self.device.type == "cuda"
+            else torch.float32
+        )
         self.policy_layers = None
         self.policy_conditions = None
         self.latest_rgb = None
@@ -126,7 +134,13 @@ class ClosedLoopPipeline:
         """Prime M3; one external frame implies one external bootstrap chunk."""
         condition = {key: value.to(self.device) if torch.is_tensor(value) else value
                      for key, value in first_conditions.items()}
-        self.renderer_rollout.start(first_latents.to(self.device), condition)
+        first_latents = first_latents.to(self.device, dtype=self.renderer_dtype)
+        with torch.autocast(
+            device_type=self.device.type,
+            dtype=torch.bfloat16,
+            enabled=self.renderer_dtype == torch.bfloat16,
+        ):
+            self.renderer_rollout.start(first_latents, condition)
         history = torch.as_tensor(action_history, dtype=torch.float32, device=self.device)
         if history.shape != (len(self.resident_ids), 8, 23):
             raise ValueError("bootstrap action chunk must be [A,8,23]")
@@ -200,10 +214,17 @@ class ClosedLoopPipeline:
             device=self.device, initial_hp=initial_hp,
         )
         cfg = self.renderer_rollout.model.cfg
-        noise = torch.randn(len(self.resident_ids), 8, cfg.in_channels, cfg.input_h, cfg.input_w,
-                            device=self.device)
-        latent = self.renderer_rollout.generate(noise, condition)
-        rgb = self.codec.decode(latent)
+        noise = torch.randn(
+            len(self.resident_ids), 8, cfg.in_channels, cfg.input_h, cfg.input_w,
+            device=self.device, dtype=self.renderer_dtype,
+        )
+        with torch.autocast(
+            device_type=self.device.type,
+            dtype=torch.bfloat16,
+            enabled=self.renderer_dtype == torch.bfloat16,
+        ):
+            latent = self.renderer_rollout.generate(noise, condition)
+            rgb = self.codec.decode(latent)
         completed = dict(condition)
         completed["condition_mask"] = torch.ones(
             latent.shape[:2], dtype=torch.bool, device=self.device)

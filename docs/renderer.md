@@ -89,8 +89,10 @@ Their exact episode, start frame and target resident are frozen in
 `visualizations/probes.json`; the model sees one known frame and generates the
 next 64 as eight cached eight-frame chunks, so these are not teacher-forced
 previews.
-Configure this with `--visualize-every`, `--visualization-denoising-steps` and
-the `--wandb-*` flags.
+Visualization inherits `--precision`: the VAE, denoiser, and temporal KV cache
+all use BF16 when training uses BF16, while quality metrics are accumulated in
+FP32. Configure probes with `--visualize-every`, `--visualization-denoising-steps`
+and the `--wandb-*` flags.
 
 B200 environment and OSS-safe checkpoint instructions are in
 [`m3_b200.md`](m3_b200.md). In particular, set `--checkpoint-staging-dir` to
@@ -98,7 +100,9 @@ node-local storage or PFS when `--output-dir` is on an OSS FUSE mount.
 
 ## Inference integration
 
-1. Encode the externally supplied first RGB with `RendererCodec.encode`.
+1. Encode the externally supplied first RGB with `RendererCodec.encode` under the
+   same BF16/FP32 autocast mode used for training. `ClosedLoopPipeline` defaults
+   to BF16 and keeps its input noise, latent, VAE decode and KV cache in that mode.
 2. `RendererRollout.start(first_latent, first_conditions)` initializes and
    prefills independent caches for the batch's target residents.
 3. For each M2 transition, commit writes, run required M1 fill, then call
