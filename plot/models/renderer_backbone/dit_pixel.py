@@ -641,6 +641,8 @@ class FrameDepthStackPixelDitDenoiserArgs:
     action_cond_dim : int = 23
     extra_condition_dim : int = 0
     actor_condition_dim : int = 0
+    deep_condition_reinjection : bool = False
+    hud_condition_dim : int = 0
     context_window_size : int = 16
     cache_window_size : int = 32
     is_causal : bool = True
@@ -686,6 +688,8 @@ class FrameDepthStackPixelDiT(nn.Module):
             action_cond_dim=23,
             extra_condition_dim=0,
             actor_condition_dim=0,
+            deep_condition_reinjection=False,
+            hud_condition_dim=0,
             context_window_size=32,
             cache_window_size=32,
             is_causal=True,
@@ -734,6 +738,7 @@ class FrameDepthStackPixelDiT(nn.Module):
         self.raster_cache = None
         self.qk_rms_norm = qk_rms_norm
         self.gradient_checkpointing = gradient_checkpointing
+        self.deep_condition_reinjection = bool(deep_condition_reinjection)
 
         # Calculate depth-compressed raster dimensions
         raster_num_layers = self.voxel_dim * 4
@@ -764,6 +769,25 @@ class FrameDepthStackPixelDiT(nn.Module):
             else None
         )
         self.condition_mask_embedder = nn.Linear(1, hidden_size) if use_condition_mask else None
+        if self.deep_condition_reinjection:
+            if hud_condition_dim < 1:
+                raise ValueError("deep condition reinjection requires hud_condition_dim")
+            self.hud_condition_embedder = nn.Conv2d(
+                hud_condition_dim, hidden_size, kernel_size=patch_size, stride=patch_size
+            )
+            self.condition_reinjectors = nn.ModuleList(
+                [
+                    nn.Sequential(
+                        nn.LayerNorm(hidden_size),
+                        nn.SiLU(),
+                        nn.Linear(hidden_size, hidden_size),
+                    )
+                    for _ in range(depth)
+                ]
+            )
+        else:
+            self.hud_condition_embedder = None
+            self.condition_reinjectors = None
 
         #spatial encodings
         self.pixel_spatial_emb = RotaryEmbedding(
@@ -845,6 +869,11 @@ class FrameDepthStackPixelDiT(nn.Module):
         if self.actor_condition_embedder is not None:
             nn.init.constant_(self.actor_condition_embedder.weight, 0)
             nn.init.constant_(self.actor_condition_embedder.bias, 0)
+        if self.condition_reinjectors is not None:
+            # This makes an old checkpoint an exact functional warm start.
+            for adapter in self.condition_reinjectors:
+                nn.init.constant_(adapter[-1].weight, 0)
+                nn.init.constant_(adapter[-1].bias, 0)
 
         # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
         w = self.x_embedder.proj.weight.data
@@ -989,6 +1018,23 @@ class FrameDepthStackPixelDiT(nn.Module):
         if raster_cond is None:
             raster_cond = self.project_raster(external_cond, x.dtype)
 
+        condition_tokens = None
+        if self.deep_condition_reinjection:
+            # Reuse the trained raster slice of the patch embedder so a warm
+            # start already has meaningful aligned 3D condition tokens.
+            raster_tokens = F.conv2d(
+                raster_cond,
+                self.x_embedder.proj.weight[:, self.in_channels:],
+                bias=None,
+                stride=self.x_embedder.proj.stride,
+                padding=self.x_embedder.proj.padding,
+                dilation=self.x_embedder.proj.dilation,
+                groups=self.x_embedder.proj.groups,
+            )
+            condition_tokens = rearrange(
+                raster_tokens, "(b t) d h w -> b t h w d", b=B, t=T
+            )
+
         # Stack pixel embedding and raster embedding
         x = rearrange(x, "b t c h w -> (b t) c h w")
         x = torch.cat([x, raster_cond], dim=1)  # (bt, 16+64, h, w)
@@ -996,6 +1042,7 @@ class FrameDepthStackPixelDiT(nn.Module):
         # embed x
         x = self.x_embedder(x)  # (B*T, C, H, W) -> (B*T, H/2, W/2, D) , C = 16, D = d_model
 
+        actor_tokens = None
         if self.actor_condition_embedder is not None:
             actor_condition = external_cond.get("actor_spatial_condition")
             if actor_condition is None:
@@ -1009,12 +1056,17 @@ class FrameDepthStackPixelDiT(nn.Module):
                 rearrange(actor_condition, "b t c h w -> (b t) c h w").to(x.dtype)
             )
             x = x + rearrange(actor_tokens, "bt d h w -> bt h w d")
+            if condition_tokens is not None:
+                condition_tokens = condition_tokens + rearrange(
+                    actor_tokens, "(b t) d h w -> b t h w d", b=B, t=T
+                )
 
         x = rearrange(x, "(b t) h w d -> b t h w d", b=B, t=T)
         # embed noise steps
         t = rearrange(t, "b t -> (b t)")
         c = self.t_embedder(t)  # (N, D)
         c = rearrange(c, "(b t) d -> b t d", b=B, t=T)
+        state_condition = torch.zeros_like(c)
 
         if self.condition_mask_embedder is not None:
             condition_mask = external_cond.get("condition_mask")
@@ -1029,7 +1081,9 @@ class FrameDepthStackPixelDiT(nn.Module):
 
         if external_cond:
             action_cond = external_cond['action']
-            c += self.action_embedder(action_cond)
+            action_embedding = self.action_embedder(action_cond)
+            c += action_embedding
+            state_condition += action_embedding
             action_prefix_mask = external_cond.get("action_prefix_mask")
             if action_prefix_mask is not None:
                 if action_prefix_mask.shape != (B, T):
@@ -1037,10 +1091,12 @@ class FrameDepthStackPixelDiT(nn.Module):
                         f"action_prefix_mask must have shape {(B, T)}, "
                         f"got {tuple(action_prefix_mask.shape)}"
                     )
-                c += (
+                prefix_embedding = (
                     action_prefix_mask.to(c.dtype).unsqueeze(-1)
                     * self.window_prefix_embedding.to(c.dtype)
                 )
+                c += prefix_embedding
+                state_condition += prefix_embedding
             if self.extra_condition_embedder is not None:
                 extra_condition = external_cond.get("extra_condition")
                 if extra_condition is not None:
@@ -1049,11 +1105,27 @@ class FrameDepthStackPixelDiT(nn.Module):
                             "extra_condition must start with shape "
                             f"{(B, T)}, got {tuple(extra_condition.shape)}"
                         )
-                    c += self.extra_condition_embedder(extra_condition.to(c.dtype))
+                    extra_embedding = self.extra_condition_embedder(extra_condition.to(c.dtype))
+                    c += extra_embedding
+                    state_condition += extra_embedding
+        if condition_tokens is not None:
+            hud_condition = external_cond.get("hud_condition")
+            expected_hud = (B, T, self.hud_condition_embedder.in_channels, H, W)
+            if hud_condition is None or tuple(hud_condition.shape) != expected_hud:
+                raise ValueError(f"hud_condition must have shape {expected_hud}")
+            hud_tokens = self.hud_condition_embedder(
+                rearrange(hud_condition, "b t c h w -> (b t) c h w").to(x.dtype)
+            )
+            condition_tokens = condition_tokens + rearrange(
+                hud_tokens, "(b t) d h w -> b t h w d", b=B, t=T
+            )
+            condition_tokens = condition_tokens + state_condition[:, :, None, None]
         # Convert to tensor for torch.compile compatibility (avoids dynamo guards on int values)
         global_start_idx_t = torch.tensor(global_start_idx, device=x.device)
         kv_candidates = []
         for i, block in enumerate(self.blocks):
+            if self.condition_reinjectors is not None:
+                x = x + self.condition_reinjectors[i](condition_tokens)
             cache = self.kv_caches[i] if self.kv_caches else None
             if self.gradient_checkpointing and self.training and cache is None:
                 x = checkpoint(

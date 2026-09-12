@@ -30,6 +30,7 @@ class RendererArgs:
     cache_frames: int = 32
     gradient_checkpointing: bool = True
     gpu_rasterizer: bool = True
+    deep_condition_reinjection: bool = False
 
 
 class ResidentConditionEncoder(MultiAgentRenderConditionEncoder):
@@ -105,6 +106,8 @@ class Renderer(nn.Module):
             extra_condition_dim=cfg.condition_dim, actor_condition_dim=cfg.actor_channels,
             context_window_size=cfg.context_frames, cache_window_size=cfg.cache_frames,
             voxel_dim=48, is_causal=True, use_condition_mask=True,
+            deep_condition_reinjection=cfg.deep_condition_reinjection,
+            hud_condition_dim=3 if cfg.deep_condition_reinjection else 0,
             gradient_checkpointing=cfg.gradient_checkpointing,
             aggregation_config={} if cfg.gpu_rasterizer else None)
 
@@ -127,6 +130,20 @@ class Renderer(nn.Module):
             "condition_mask": cond["condition_mask"],
             "action_prefix_mask": cond["action_prefix_mask"],
         }
+        if self.cfg.deep_condition_reinjection:
+            target_hp = self.select(cond["hp"], target) / 20.0
+            target_hp_delta = self.select(cond["event_cues"], target)[..., 3] / 20.0
+            hud = target_hp.new_zeros(
+                (*target_hp.shape, 3, self.cfg.input_h, self.cfg.input_w)
+            )
+            left = round(190 / 640 * self.cfg.input_w)
+            right = round(314 / 640 * self.cfg.input_w)
+            top = round(300 / 360 * self.cfg.input_h)
+            bottom = round(322 / 360 * self.cfg.input_h)
+            hud[..., 0, top:bottom, left:right] = 1
+            hud[..., 1, top:bottom, left:right] = target_hp[..., None, None]
+            hud[..., 2, top:bottom, left:right] = target_hp_delta[..., None, None]
+            result["hud_condition"] = hud
         if "raster_features" in cond:
             result.update(raster_features=cond["raster_features"], raster_depth=cond["raster_depth"])
         else:

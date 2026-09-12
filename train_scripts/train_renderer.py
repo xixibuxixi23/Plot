@@ -50,6 +50,10 @@ def main():
     parser.add_argument("--vocabulary", required=True)
     parser.add_argument("--pixel-vae", required=True)
     parser.add_argument("--backbone-checkpoint")
+    parser.add_argument(
+        "--warm-start",
+        help="Load model weights without optimizer state; intended for compatible architecture changes",
+    )
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--window-index")
     parser.add_argument("--val-window-index")
@@ -61,6 +65,11 @@ def main():
         help="Total sampling multiplicity for windows containing a non-full-health target",
     )
     parser.add_argument("--resume")
+    parser.add_argument(
+        "--deep-condition-reinjection",
+        action="store_true",
+        help="Reinject aligned raster, actor, action, resident state, and HUD conditions at every DiT block",
+    )
     parser.add_argument("--context-frames", type=int, default=65)
     parser.add_argument("--cache-frames", type=int, default=32)
     parser.add_argument("--hidden-size", type=int, default=1024)
@@ -114,6 +123,8 @@ def main():
         help="Keep training and record failures, or stop if a checkpoint cannot be copied",
     )
     args = parser.parse_args()
+    if sum(bool(path) for path in (args.resume, args.warm_start, args.backbone_checkpoint)) > 1:
+        parser.error("--resume, --warm-start, and --backbone-checkpoint are mutually exclusive")
     if (
         min(
             args.steps,
@@ -193,10 +204,11 @@ def main():
         voxel_channels=args.voxel_channels,
         condition_dim=args.condition_dim,
         actor_channels=args.actor_channels,
+        deep_condition_reinjection=args.deep_condition_reinjection,
     )
     with torch.cuda.device(device):
         raw_model = Renderer(cfg).to(device).train()
-    if args.backbone_checkpoint and not args.resume:
+    if args.backbone_checkpoint:
         report = raw_model.load_2daction_backbone(load_weights(args.backbone_checkpoint))
         if rank == 0:
             print(json.dumps(report))
@@ -208,6 +220,29 @@ def main():
         raw_model.load_state_dict(checkpoint["model"], strict=True)
         optimizer.load_state_dict(checkpoint["optimizer"])
         start_step = int(checkpoint["step"])
+    elif args.warm_start:
+        checkpoint = torch.load(args.warm_start, map_location="cpu", weights_only=False)
+        incompatible = raw_model.load_state_dict(checkpoint["model"], strict=False)
+        allowed_missing = (
+            "core.hud_condition_embedder.",
+            "core.condition_reinjectors.",
+        )
+        invalid_missing = [
+            key for key in incompatible.missing_keys
+            if not key.startswith(allowed_missing)
+        ]
+        if invalid_missing or incompatible.unexpected_keys:
+            raise RuntimeError(
+                "incompatible warm start: "
+                f"missing={invalid_missing}, unexpected={incompatible.unexpected_keys}"
+            )
+        start_step = int(checkpoint.get("step", 0))
+        if rank == 0:
+            print(json.dumps({
+                "warm_start": str(args.warm_start),
+                "step": start_step,
+                "initialized_parameters": incompatible.missing_keys,
+            }))
     model = (
         DistributedDataParallel(raw_model, device_ids=[local_rank], broadcast_buffers=False)
         if world > 1

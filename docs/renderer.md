@@ -92,6 +92,16 @@ weights and reports every missing/skipped key. This is an initialization, not
 a full resume: PLOT's new resident encoder and block vocabulary embedding need
 training. The VAE checkpoint must match the 2DAction default ViTVaeArgs.
 
+`--deep-condition-reinjection` adds a residual condition adapter before every
+DiT block. Each adapter receives spatially aligned 3D raster and resident-map
+tokens, the current frame's action and resident-state embedding, and a localized
+health/HUD map. Its output projection is initialized to zero, so an existing M3
+checkpoint has exactly the same output immediately after loading. Use
+`--warm-start CHECKPOINT` for this architecture change: it restores the model
+and step number, starts a fresh optimizer, and rejects missing keys outside the
+new condition modules. `--resume` remains the strict model-and-optimizer path
+for an unchanged architecture.
+
 The initial full configuration is 1024 width / 12 layers with a 32-frame
 inference cache. Training uses exactly 65 frames: frame zero is clean and all
 remaining frames receive independent flow timesteps and loss. These are pilot

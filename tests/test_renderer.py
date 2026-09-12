@@ -86,6 +86,42 @@ def test_training_backward_and_supervision_only_masks():
         model(clean, torch.zeros(1,17), cond)
 
 
+def test_deep_condition_reinjection_is_exact_warm_start_and_trainable():
+    baseline = tiny_model().eval()
+    deep = Renderer(replace(baseline.cfg, deep_condition_reinjection=True)).eval()
+    incompatible = deep.load_state_dict(baseline.state_dict(), strict=False)
+    assert not incompatible.unexpected_keys
+    assert incompatible.missing_keys
+    assert all(
+        key.startswith(("core.hud_condition_embedder.", "core.condition_reinjectors."))
+        for key in incompatible.missing_keys
+    )
+
+    cond = conditions(9)
+    cond["hp"][:, 4:, 0] = 12
+    cond["event_cues"][:, 4, 0, 3] = -8
+    encoded = deep.encode_conditions(cond)
+    hud = encoded["hud_condition"]
+    assert hud.shape == (1, 9, 3, 4, 4)
+    assert torch.count_nonzero(hud[..., :3, :]) == 0
+    torch.testing.assert_close(hud[:, 4:, 1, 3, 1], torch.full((1, 5), 0.6))
+    torch.testing.assert_close(hud[:, 4, 2, 3, 1], torch.tensor([-.4]))
+
+    x, time = torch.randn(1, 9, 16, 4, 4), torch.rand(1, 9)
+    with torch.no_grad():
+        expected = baseline(x, time, cond)
+        actual = deep(x, time, cond)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+    deep.train()
+    deep(x, time, cond).square().mean().backward()
+    assert all(
+        adapter[-1].weight.grad is not None
+        and adapter[-1].weight.grad.abs().sum() > 0
+        for adapter in deep.core.condition_reinjectors
+    )
+
+
 def test_world_translation_does_not_change_resident_features_or_projection():
     model = tiny_model().eval()
     cond = conditions(1)
