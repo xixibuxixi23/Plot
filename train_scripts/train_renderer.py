@@ -80,6 +80,15 @@ def main():
         action="store_true",
         help="Stage-one training: update only the new dense appearance modules",
     )
+    parser.add_argument(
+        "--appearance-unfreeze-last-spatial-blocks",
+        type=int,
+        default=0,
+        help=(
+            "With --freeze-base-for-appearance, also train the spatial attention, spatial "
+            "MLP/AdaLN in the last N DiT blocks and the final output layer"
+        ),
+    )
     parser.add_argument("--context-frames", type=int, default=65)
     parser.add_argument("--cache-frames", type=int, default=32)
     parser.add_argument("--hidden-size", type=int, default=1024)
@@ -139,6 +148,13 @@ def main():
         parser.error("--freeze-base-for-appearance requires --view-aware-appearance")
     if args.freeze_base_for_appearance and args.resume:
         parser.error("use --warm-start for staged appearance training")
+    if args.appearance_unfreeze_last_spatial_blocks and not args.freeze_base_for_appearance:
+        parser.error(
+            "--appearance-unfreeze-last-spatial-blocks requires "
+            "--freeze-base-for-appearance"
+        )
+    if not 0 <= args.appearance_unfreeze_last_spatial_blocks <= args.depth:
+        parser.error("--appearance-unfreeze-last-spatial-blocks must be between 0 and depth")
     if (
         min(
             args.steps,
@@ -229,13 +245,27 @@ def main():
             print(json.dumps(report))
     codec = RendererCodec(load_weights(args.pixel_vae)).to(device).eval()
     if args.freeze_base_for_appearance:
+        first_unfrozen_spatial_block = (
+            args.depth - args.appearance_unfreeze_last_spatial_blocks
+        )
         for name, parameter in raw_model.named_parameters():
-            parameter.requires_grad_(
-                name.startswith((
+            trainable = name.startswith(
+                (
                     "core.appearance_condition_embedder.",
                     "core.appearance_reinjectors.",
-                ))
+                )
             )
+            if args.appearance_unfreeze_last_spatial_blocks:
+                trainable = trainable or name.startswith("core.final_layer.")
+                for block_index in range(first_unfrozen_spatial_block, args.depth):
+                    trainable = trainable or name.startswith(
+                        (
+                            f"core.blocks.{block_index}.s_attn.",
+                            f"core.blocks.{block_index}.s_mlp.",
+                            f"core.blocks.{block_index}.s_adaLN_modulation.",
+                        )
+                    )
+            parameter.requires_grad_(trainable)
     trainable_parameters = [p for p in raw_model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(trainable_parameters, lr=args.lr)
     if rank == 0:
