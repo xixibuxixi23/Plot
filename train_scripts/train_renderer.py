@@ -90,7 +90,7 @@ def main():
         ),
     )
     parser.add_argument("--context-frames", type=int, default=65)
-    parser.add_argument("--cache-frames", type=int, default=32)
+    parser.add_argument("--cache-frames", type=int, default=64)
     parser.add_argument("--block-frames", type=int, default=8)
     parser.add_argument("--hidden-size", type=int, default=1024)
     parser.add_argument("--depth", type=int, default=12)

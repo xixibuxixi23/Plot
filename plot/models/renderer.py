@@ -30,7 +30,7 @@ class RendererArgs:
     actor_channels: int = 16
     max_agents: int = 8
     context_frames: int = 65
-    cache_frames: int = 32
+    cache_frames: int = 64
     block_frames: int = 8
     gradient_checkpointing: bool = True
     gpu_rasterizer: bool = True
