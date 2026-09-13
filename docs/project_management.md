@@ -86,13 +86,13 @@ its step, compute SHA-256, and then upload it.
 
 ## Integrating the legacy Polis workspace
 
-The active M1 run continues in its existing `Polis` directory until a safe
-checkpoint. Its maintained M1 model, trainer, tests and documentation were
-migrated into this repository at commit `4b6ce14`; the immutable step-1,127,000
-resume checkpoint passes a strict CPU state-dict load. Before the first
-PLOT-based resume, run a short multi-GPU smoke test and compare one fixed
-evaluation batch. Once that passes, rename the old directory to
-`Polis-legacy-readonly`; do not delete its outputs.
+The legacy M1 run stopped at step 1,476,560 with a complete step-1,476,000
+resume checkpoint. Its maintained M1 model, trainer, tests and documentation
+were migrated into this repository at commit `4b6ce14`; the earlier immutable
+step-1,127,000 checkpoint passes a strict CPU state-dict load. Do not restart
+new development in `Polis`. Before the first PLOT-based resume, run a short
+multi-GPU smoke test and compare one fixed evaluation batch. Once that passes,
+rename the old directory to `Polis-legacy-readonly`; do not delete its outputs.
 
 Do not merge the two unrelated Git histories with
 `--allow-unrelated-histories`, and do not copy either `.git` directory. Migrate

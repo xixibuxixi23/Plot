@@ -8,11 +8,14 @@ prefix does not identify the hardware that created a commit.
 
 | Machine | Development workspace | Training workspace | Rule |
 |---|---|---|---|
-| H200 | `Plot` on `main` or a short-lived feature branch | legacy `Polis` for the already-running M1 job | Do not start new development in `Polis`; the next M1 run must use a detached PLOT worktree. |
-| H100 | `Plot-dev` on `main` or a short-lived feature branch | `Plot` for the already-running M3 job | The current M3 process loaded commit `5e874fd`; later commits in the directory do not alter that live process. Use a detached worktree for the next M3 run. |
+| H200 | `Plot` on `main` or a short-lived feature branch | legacy `Polis` contains the stopped M1 run | Do not restart new development in `Polis`; the next M1 run must use a detached PLOT worktree. |
+| H100 | `Plot-dev` on `main` or a short-lived feature branch | `Plot-runs/m3_h100_blockcausal_resume25000_20260914` is detached at `5e874fd` and prepared, but not launched | `Plot` retains the historical M3 feature branch; use the detached worktree only if the step-25,000 run is intentionally resumed. |
 
-The current workspaces predate the final layout and are exceptions. Do not
-rename, move, pull, switch branches, or clean either active training directory.
+No M1 or M3 training process was active at the 2026-09-13 21:47 UTC audit.
+Preserve both output directories and do not report a prepared worktree as a
+running job. The old H200 `Polis` and H100 `Plot` workspaces predate the final
+layout and remain explicit exceptions until their outputs and branches are
+archived.
 
 ## Required layout for the next run
 
