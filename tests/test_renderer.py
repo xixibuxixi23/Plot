@@ -153,6 +153,49 @@ def test_deep_condition_reinjection_is_exact_warm_start_and_trainable():
     )
 
 
+def test_detail_preserving_appearance_is_an_exact_trainable_warm_start():
+    base = tiny_model()
+    regular = Renderer(replace(
+        base.cfg,
+        view_aware_appearance=True,
+    )).eval()
+    regular.load_state_dict(base.state_dict(), strict=False)
+    with torch.no_grad():
+        # Represent a checkpoint whose original appearance adapters have
+        # already learned nonzero behavior.
+        for adapter in regular.core.appearance_reinjectors:
+            adapter.to_output.weight.normal_(std=.01)
+
+    detail = Renderer(replace(
+        regular.cfg,
+        detail_preserving_appearance=True,
+    )).eval()
+    incompatible = detail.load_state_dict(regular.state_dict(), strict=False)
+    assert not incompatible.unexpected_keys
+    assert incompatible.missing_keys
+    assert all(
+        key.startswith((
+            "core.appearance_detail_embedder.",
+            "core.appearance_detail_reinjectors.",
+        ))
+        for key in incompatible.missing_keys
+    )
+    cond = conditions(9)
+    x, time = torch.randn(1, 9, 16, 4, 4), torch.rand(1, 9)
+    with torch.no_grad():
+        expected = regular(x, time, cond)
+        actual = detail(x, time, cond)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+    detail.train()
+    detail(x, time, cond).square().mean().backward()
+    assert all(
+        adapter.to_output.weight.grad is not None
+        and adapter.to_output.weight.grad.abs().sum() > 0
+        for adapter in detail.core.appearance_detail_reinjectors
+    )
+
+
 def test_view_aware_appearance_preserves_reference_pixels_and_selects_back_view():
     renderer = ViewAwarePlayerAppearance(height=8, width=8)
     b, t, a = 1, 1, 2
@@ -317,8 +360,13 @@ def test_continuous_dataset_preserves_state_time_and_splits(tmp_path, monkeypatc
              wielded_item_id=np.tile([0,1],(t-1,1)),
              player_health=health, player_health_valid=np.ones((t,a),bool),
              termination_flag=np.zeros((t-1,a),bool), entity_id=np.array(['agent0','agent1']),
+             entity_kind=np.array(['player','player']),
+             entity_render_object_id=np.tile([10,11],(t,1)).astype(np.uint16),
              entity_weapon_name=np.tile(['','sword'],(t,1)), entity_valid=np.ones((t,a),bool),
-             instance_mask=np.full((t,a,4,4),65535,np.uint16))
+             instance_mask=np.stack((
+                 np.full((t,4,4),11,np.uint16),
+                 np.full((t,4,4),10,np.uint16),
+             ),axis=1))
     for slot in range(a):
         root = tmp_path / 'players' / f'agent{slot}'
         root.mkdir(parents=True)
@@ -338,6 +386,7 @@ def test_continuous_dataset_preserves_state_time_and_splits(tmp_path, monkeypatc
     assert sample['region_weight'].min() == 5
     assert sample['pixel_region_mask'].dtype == torch.bool
     assert sample['pixel_region_mask'].shape == (17, 1, 4, 4)
+    assert sample['player_region_mask'].all()
     assert not {'instance_mask','crop_anchor','behavior_text'} & cond.keys()
     paired = module.TextAgentRendererDataset(
         tmp_path, BlockVocabulary((0,7)), context_frames=17,
@@ -348,6 +397,7 @@ def test_continuous_dataset_preserves_state_time_and_splits(tmp_path, monkeypatc
     flat = module.collate_renderer([paired])
     assert flat['rgb'].shape[:2] == (2, 17)
     assert flat['pixel_region_mask'].shape == (2, 17, 1, 4, 4)
+    assert flat['player_region_mask'].shape == (2, 17, 1, 4, 4)
 
     uniform = module.TextAgentRendererDataset(
         tmp_path, BlockVocabulary((0,7)), context_frames=17,
@@ -417,14 +467,18 @@ def test_full_resolution_entity_and_health_losses_are_differentiable():
     target[:, 1:, :, :2, :2] = 1
     entity = torch.zeros(1, 3, 1, 4, 4, dtype=torch.bool)
     entity[:, 1:, :, :2, :2] = True
+    player = torch.zeros_like(entity)
+    player[:, 2:, :, :2, :2] = True
     losses = renderer_pixel_losses(
-        Codec(), predicted, target, entity,
+        Codec(), predicted, target, entity, player_region_mask=player,
         frames_per_sample=2, generator=torch.Generator().manual_seed(0),
         health_box=(0, 0, 0.5, 0.5),
     )
     assert losses['entity_pixel_l1'] == 1
     assert losses['health_pixel_l1'] == 1
     assert losses['entity_pixel_edge'] > 0
+    assert losses['player_pixel_l1'] == 1
+    assert losses['player_pixel_edge'] > 0
     sum(losses.values()).backward()
     assert predicted.grad.abs().sum() > 0
 

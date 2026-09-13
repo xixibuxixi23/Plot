@@ -286,6 +286,19 @@ class TextAgentRendererDataset(Dataset):
             masks = data["instance_mask"][start:end, target]
             if masks.dtype != np.uint16:
                 raise ValueError("instance_mask must retain the raw uint16 entity IDs")
+            # Keep a separate mask for visible, non-camera human players.  The
+            # legacy entity mask also contains mobs, attachments and the
+            # first-person wield view, so it cannot measure appearance quality.
+            player_masks = np.zeros_like(masks, dtype=bool)
+            if "entity_render_object_id" in data and "entity_kind" in data:
+                render_ids = data["entity_render_object_id"][start:end, entity_slots]
+                entity_kinds = data["entity_kind"].astype(str)
+                for slot, entity_slot in enumerate(entity_slots):
+                    if slot == target or entity_kinds[entity_slot] != "player":
+                        continue
+                    ids = render_ids[:, slot]
+                    valid_ids = (ids > 0) & (ids != np.iinfo(np.uint16).max)
+                    player_masks |= (masks == ids[:, None, None]) & valid_ids[:, None, None]
             weights = np.stack([cv2.resize((m != 0).astype(np.float32), self.latent_size[::-1],
                                             interpolation=cv2.INTER_AREA) for m in masks])
             actions = incoming_actions(data["action_continuous"], start, t)
@@ -336,11 +349,13 @@ class TextAgentRendererDataset(Dataset):
             "condition_mask": np.arange(t) == 0, "action_prefix_mask": np.arange(t) == 0,
         }
         pixel_region_mask = (masks != 0)[:, None]
+        player_region_mask = player_masks[:, None]
         return {"rgb": torch.from_numpy(rgb),
                 "region_weight": torch.from_numpy(
                     1 + self.entity_region_upweight * weights[:, None]
                 ),
                 "pixel_region_mask": torch.from_numpy(pixel_region_mask),
+                "player_region_mask": torch.from_numpy(player_region_mask),
                 "conditions": {k: torch.from_numpy(v) for k, v in condition.items()}}
 
 
@@ -364,4 +379,5 @@ def collate_renderer(samples):
         result[key] = torch.stack(values)
     return {"conditions": result, "rgb": torch.stack([s["rgb"] for s in samples]),
             "region_weight": torch.stack([s["region_weight"] for s in samples]),
-            "pixel_region_mask": torch.stack([s["pixel_region_mask"] for s in samples])}
+            "pixel_region_mask": torch.stack([s["pixel_region_mask"] for s in samples]),
+            "player_region_mask": torch.stack([s["player_region_mask"] for s in samples])}

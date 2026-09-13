@@ -195,9 +195,30 @@ def render_probe(
     left, right = round(190 / 640 * width), round(314 / 640 * width)
     top, bottom = round(300 / 360 * height), round(322 / 360 * height)
     health_l1 = error[..., top:bottom, left:right].mean()
-    return {
+    metrics = {
         "l1": float(error.mean()),
         "psnr": float(-10 * torch.log10(mse)),
         "entity_l1": float(entity_l1),
         "health_l1": float(health_l1),
     }
+    if "player_region_mask" in sample:
+        player_mask = sample["player_region_mask"][0, 1:65].to(device).float()
+        player_pixels = player_mask.sum()
+        if player_pixels > 0:
+            player_l1 = (error * player_mask).sum() / (player_pixels * error.shape[1])
+            pred_dx = (prediction[..., 1:] - prediction[..., :-1]).abs().mean(1, keepdim=True)
+            true_dx = (truth[..., 1:] - truth[..., :-1]).abs().mean(1, keepdim=True)
+            pred_dy = (prediction[..., 1:, :] - prediction[..., :-1, :]).abs().mean(1, keepdim=True)
+            true_dy = (truth[..., 1:, :] - truth[..., :-1, :]).abs().mean(1, keepdim=True)
+            mask_x = torch.maximum(player_mask[..., 1:], player_mask[..., :-1])
+            mask_y = torch.maximum(player_mask[..., 1:, :], player_mask[..., :-1, :])
+            pred_detail = (pred_dx * mask_x).sum() + (pred_dy * mask_y).sum()
+            true_detail = (true_dx * mask_x).sum() + (true_dy * mask_y).sum()
+            metrics.update(
+                player_l1=float(player_l1),
+                player_detail_ratio=float(pred_detail / true_detail.clamp_min(1e-8)),
+                player_pixels=float(player_pixels),
+            )
+        else:
+            metrics["player_pixels"] = 0.0
+    return metrics

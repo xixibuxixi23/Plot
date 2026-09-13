@@ -33,6 +33,8 @@ LOSS_NAMES = (
     "auxiliary_loss",
     "entity_pixel_l1",
     "entity_pixel_edge",
+    "player_pixel_l1",
+    "player_pixel_edge",
     "health_pixel_l1",
 )
 
@@ -74,6 +76,11 @@ def main():
         "--view-aware-appearance",
         action="store_true",
         help="Warp dense four-view resident references into masked per-block appearance adapters",
+    )
+    parser.add_argument(
+        "--detail-preserving-appearance",
+        action="store_true",
+        help="Preserve 2x2 sub-patch resident appearance and use nonattenuating occupancy gates",
     )
     parser.add_argument(
         "--freeze-base-for-appearance",
@@ -124,6 +131,8 @@ def main():
     )
     parser.add_argument("--entity-pixel-l1-weight", type=float, default=0.5)
     parser.add_argument("--entity-pixel-edge-weight", type=float, default=0.2)
+    parser.add_argument("--player-pixel-l1-weight", type=float, default=0.0)
+    parser.add_argument("--player-pixel-edge-weight", type=float, default=0.0)
     parser.add_argument("--health-pixel-l1-weight", type=float, default=1.0)
     parser.add_argument("--damaged-health-upweight", type=float, default=4.0)
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -147,6 +156,8 @@ def main():
         parser.error("--resume, --warm-start, and --backbone-checkpoint are mutually exclusive")
     if args.freeze_base_for_appearance and not args.view_aware_appearance:
         parser.error("--freeze-base-for-appearance requires --view-aware-appearance")
+    if args.detail_preserving_appearance and not args.view_aware_appearance:
+        parser.error("--detail-preserving-appearance requires --view-aware-appearance")
     if args.freeze_base_for_appearance and args.resume:
         parser.error("use --warm-start for staged appearance training")
     if args.appearance_unfreeze_last_spatial_blocks and not args.freeze_base_for_appearance:
@@ -178,6 +189,8 @@ def main():
         args.latent_entity_region_upweight,
         args.entity_pixel_l1_weight,
         args.entity_pixel_edge_weight,
+        args.player_pixel_l1_weight,
+        args.player_pixel_edge_weight,
         args.health_pixel_l1_weight,
         args.damaged_health_upweight,
     ) < 0:
@@ -238,6 +251,7 @@ def main():
         actor_channels=args.actor_channels,
         deep_condition_reinjection=args.deep_condition_reinjection,
         view_aware_appearance=args.view_aware_appearance,
+        detail_preserving_appearance=args.detail_preserving_appearance,
     )
     with torch.cuda.device(device):
         raw_model = Renderer(cfg).to(device).train()
@@ -254,6 +268,8 @@ def main():
             trainable = name.startswith(
                 (
                     "core.appearance_condition_embedder.",
+                    "core.appearance_detail_embedder.",
+                    "core.appearance_detail_reinjectors.",
                     "core.appearance_reinjectors.",
                 )
             )
@@ -288,6 +304,8 @@ def main():
             "core.hud_condition_embedder.",
             "core.condition_reinjectors.",
             "core.appearance_condition_embedder.",
+            "core.appearance_detail_embedder.",
+            "core.appearance_detail_reinjectors.",
             "core.appearance_reinjectors.",
         )
         invalid_missing = [
@@ -388,6 +406,8 @@ def main():
         "frames_per_sample": args.pixel_loss_frames,
         "entity_pixel_l1_weight": args.entity_pixel_l1_weight,
         "entity_pixel_edge_weight": args.entity_pixel_edge_weight,
+        "player_pixel_l1_weight": args.player_pixel_l1_weight,
+        "player_pixel_edge_weight": args.player_pixel_edge_weight,
         "health_pixel_l1_weight": args.health_pixel_l1_weight,
         "damaged_health_upweight": args.damaged_health_upweight,
     }
@@ -424,6 +444,7 @@ def main():
                         conditions,
                         rgb,
                         batch["pixel_region_mask"].to(device),
+                        player_region_mask=batch["player_region_mask"].to(device),
                         region_weight=batch["region_weight"].to(device),
                         **loss_kwargs,
                     )
@@ -499,6 +520,7 @@ def main():
                             condition,
                             rgb,
                             val["pixel_region_mask"].to(device),
+                            player_region_mask=val["player_region_mask"].to(device),
                             region_weight=val["region_weight"].to(device),
                             generator=torch.Generator(device=device).manual_seed(
                                 args.seed + number

@@ -36,6 +36,7 @@ class RendererArgs:
     gpu_rasterizer: bool = True
     deep_condition_reinjection: bool = False
     view_aware_appearance: bool = False
+    detail_preserving_appearance: bool = False
 
 
 class ResidentConditionEncoder(MultiAgentRenderConditionEncoder):
@@ -100,6 +101,8 @@ class Renderer(nn.Module):
         super().__init__()
         if cfg.block_frames < 1:
             raise ValueError("block_frames must be positive")
+        if cfg.detail_preserving_appearance and not cfg.view_aware_appearance:
+            raise ValueError("detail-preserving appearance requires view-aware appearance")
         if cfg.cache_frames < cfg.block_frames or cfg.context_frames < 1 + cfg.block_frames:
             raise ValueError("M3 requires room for one output block and its prefix")
         if (cfg.context_frames - 1) % cfg.block_frames:
@@ -128,6 +131,7 @@ class Renderer(nn.Module):
                 if self.appearance_spatial_encoder is not None
                 else 0
             ),
+            detail_preserving_appearance=cfg.detail_preserving_appearance,
             gradient_checkpointing=cfg.gradient_checkpointing,
             aggregation_config={} if cfg.gpu_rasterizer else None)
 

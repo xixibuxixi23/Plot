@@ -683,6 +683,7 @@ class FrameDepthStackPixelDitDenoiserArgs:
     deep_condition_reinjection : bool = False
     hud_condition_dim : int = 0
     appearance_condition_dim : int = 0
+    detail_preserving_appearance : bool = False
     context_window_size : int = 16
     cache_window_size : int = 32
     is_causal : bool = True
@@ -731,6 +732,7 @@ class FrameDepthStackPixelDiT(nn.Module):
             deep_condition_reinjection=False,
             hud_condition_dim=0,
             appearance_condition_dim=0,
+            detail_preserving_appearance=False,
             context_window_size=32,
             cache_window_size=32,
             is_causal=True,
@@ -840,9 +842,27 @@ class FrameDepthStackPixelDiT(nn.Module):
             self.appearance_reinjectors = nn.ModuleList(
                 [AlignedAppearanceAdapter(hidden_size) for _ in range(depth)]
             )
+            if detail_preserving_appearance:
+                # Preserve the four values inside every 2x2 latent patch before
+                # projecting them to a DiT token.  This gives small residents a
+                # direct path that does not first blur neighboring pixels.
+                self.appearance_detail_embedder = nn.Sequential(
+                    nn.PixelUnshuffle(patch_size),
+                    nn.Conv2d(appearance_condition_dim * patch_size**2, 256, 1),
+                    nn.SiLU(),
+                    nn.Conv2d(256, hidden_size, 1),
+                )
+                self.appearance_detail_reinjectors = nn.ModuleList(
+                    [AlignedAppearanceAdapter(hidden_size) for _ in range(depth)]
+                )
+            else:
+                self.appearance_detail_embedder = None
+                self.appearance_detail_reinjectors = None
         else:
             self.appearance_condition_embedder = None
             self.appearance_reinjectors = None
+            self.appearance_detail_embedder = None
+            self.appearance_detail_reinjectors = None
 
         #spatial encodings
         self.pixel_spatial_emb = RotaryEmbedding(
@@ -932,6 +952,12 @@ class FrameDepthStackPixelDiT(nn.Module):
                 nn.init.constant_(adapter[-1].bias, 0)
         if self.appearance_reinjectors is not None:
             for adapter in self.appearance_reinjectors:
+                nn.init.constant_(adapter.to_output.weight, 0)
+                nn.init.constant_(adapter.to_output.bias, 0)
+        if self.appearance_detail_reinjectors is not None:
+            # Exact warm start: the existing appearance path is unchanged until
+            # the new detail adapters learn to use sub-patch features.
+            for adapter in self.appearance_detail_reinjectors:
                 nn.init.constant_(adapter.to_output.weight, 0)
                 nn.init.constant_(adapter.to_output.bias, 0)
 
@@ -1124,6 +1150,8 @@ class FrameDepthStackPixelDiT(nn.Module):
         x = rearrange(x, "(b t) h w d -> b t h w d", b=B, t=T)
         appearance_tokens = None
         appearance_mask = None
+        appearance_detail_tokens = None
+        appearance_detail_mask = None
         if self.appearance_condition_embedder is not None:
             appearance_condition = external_cond.get("appearance_spatial_condition")
             expected = (
@@ -1139,6 +1167,17 @@ class FrameDepthStackPixelDiT(nn.Module):
                 appearance_condition, "b t c h w -> (b t) c h w"
             ).to(x.dtype)
             appearance_tokens = self.appearance_condition_embedder(appearance_flat)
+            if self.appearance_detail_embedder is not None:
+                appearance_detail_tokens = rearrange(
+                    self.appearance_detail_embedder(appearance_flat),
+                    "(b t) d h w -> b t h w d", b=B, t=T
+                )
+                appearance_detail_mask = F.max_pool2d(
+                    appearance_flat[:, 3:4], self.patch_size, self.patch_size
+                ).clamp(0, 1)
+                appearance_detail_mask = rearrange(
+                    appearance_detail_mask, "(b t) c h w -> b t h w c", b=B, t=T
+                )
             appearance_tokens = rearrange(
                 appearance_tokens, "(b t) d h w -> b t h w d", b=B, t=T
             )
@@ -1227,6 +1266,23 @@ class FrameDepthStackPixelDiT(nn.Module):
                 else:
                     appearance_delta = adapter(x, appearance_tokens, appearance_mask)
                 x = x + appearance_delta
+            if self.appearance_detail_reinjectors is not None:
+                detail_adapter = self.appearance_detail_reinjectors[i]
+                if self.gradient_checkpointing and self.training:
+                    detail_delta = checkpoint(
+                        lambda x_, reference_, mask_, adapter_=detail_adapter: adapter_(
+                            x_, reference_, mask_
+                        ),
+                        x,
+                        appearance_detail_tokens,
+                        appearance_detail_mask,
+                        use_reentrant=False,
+                    )
+                else:
+                    detail_delta = detail_adapter(
+                        x, appearance_detail_tokens, appearance_detail_mask
+                    )
+                x = x + detail_delta
             cache = self.kv_caches[i] if self.kv_caches else None
             if self.gradient_checkpointing and self.training and cache is None:
                 x = checkpoint(

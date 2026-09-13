@@ -92,6 +92,7 @@ def select_renderer_pixel_frames(
     pixel_region_mask,
     *,
     frames_per_sample,
+    player_region_mask=None,
     hp=None,
     target_agent=None,
     generator=None,
@@ -108,6 +109,17 @@ def select_renderer_pixel_frames(
     entity_frame = torch.multinomial(
         coverage + 1e-3, 1, replacement=True, generator=generator
     ) + 1
+    player_frame = entity_frame
+    if player_region_mask is not None:
+        if player_region_mask.shape != pixel_region_mask.shape:
+            raise ValueError("player_region_mask must match pixel_region_mask")
+        player_coverage = player_region_mask[:, 1:].flatten(2).sum(-1).float()
+        sampled_player = torch.multinomial(
+            player_coverage + 1e-3, 1, replacement=True, generator=generator
+        ) + 1
+        player_frame = torch.where(
+            player_coverage.sum(1, keepdim=True) > 0, sampled_player, entity_frame
+        )
     random_frame = torch.randint(
         1, frames, (batch, 1), device=pixel_region_mask.device, generator=generator
     )
@@ -134,6 +146,15 @@ def select_renderer_pixel_frames(
 
     if frames_per_sample == 1:
         indices = torch.where(has_damage[:, None], health_frame, entity_frame)
+    elif frames_per_sample >= 3 and player_region_mask is not None:
+        extras = torch.randint(
+            1,
+            frames,
+            (batch, frames_per_sample - 3),
+            device=pixel_region_mask.device,
+            generator=generator,
+        )
+        indices = torch.cat((entity_frame, health_frame, player_frame, extras), dim=1)
     else:
         extras = torch.randint(
             1,
@@ -152,6 +173,7 @@ def renderer_pixel_losses(
     target_rgb,
     pixel_region_mask,
     *,
+    player_region_mask=None,
     frames_per_sample=1,
     generator=None,
     hp=None,
@@ -171,6 +193,8 @@ def renderer_pixel_losses(
     expected_mask = (*target_rgb.shape[:2], 1, *target_rgb.shape[-2:])
     if pixel_region_mask.shape != expected_mask:
         raise ValueError("pixel_region_mask must be [B,T,1,H,W] at RGB resolution")
+    if player_region_mask is not None and player_region_mask.shape != expected_mask:
+        raise ValueError("player_region_mask must match the RGB-resolution entity mask")
     future_frames = clean_prediction.shape[1] - 1
     if not 1 <= frames_per_sample <= future_frames:
         raise ValueError("frames_per_sample must be within the future-frame count")
@@ -186,6 +210,7 @@ def renderer_pixel_losses(
     frame_indices, target_hp = select_renderer_pixel_frames(
         pixel_region_mask,
         frames_per_sample=frames_per_sample,
+        player_region_mask=player_region_mask,
         hp=hp,
         target_agent=target_agent,
         generator=generator,
@@ -200,6 +225,13 @@ def renderer_pixel_losses(
     selected_mask = pixel_region_mask[batch_indices, frame_indices].reshape(
         batch * frames_per_sample, 1, *target_rgb.shape[-2:]
     )
+    selected_player_mask = (
+        player_region_mask[batch_indices, frame_indices].reshape(
+            batch * frames_per_sample, 1, *target_rgb.shape[-2:]
+        )
+        if player_region_mask is not None
+        else torch.zeros_like(selected_mask)
+    )
     decoded = codec.decode_for_loss(selected_latent, chunk_size=1)[:, 0]
 
     entity_l1 = _masked_mean((decoded - selected_target).abs(), selected_mask)
@@ -207,6 +239,11 @@ def renderer_pixel_losses(
     # while the RGB L1 above remains confined to the exact instance mask.
     edge_mask = F.max_pool2d(selected_mask.float(), kernel_size=5, stride=1, padding=2)
     entity_edge = _masked_edge_l1(decoded, selected_target, edge_mask)
+    player_l1 = _masked_mean((decoded - selected_target).abs(), selected_player_mask)
+    player_edge_mask = F.max_pool2d(
+        selected_player_mask.float(), kernel_size=5, stride=1, padding=2
+    )
+    player_edge = _masked_edge_l1(decoded, selected_target, player_edge_mask)
 
     height, width = target_rgb.shape[-2:]
     x0, y0, x1, y1 = health_box
@@ -223,6 +260,8 @@ def renderer_pixel_losses(
     return {
         "entity_pixel_l1": entity_l1,
         "entity_pixel_edge": entity_edge,
+        "player_pixel_l1": player_l1,
+        "player_pixel_edge": player_edge,
         "health_pixel_l1": health_l1,
     }
 
@@ -235,10 +274,13 @@ def renderer_training_losses(
     target_rgb,
     pixel_region_mask,
     *,
+    player_region_mask=None,
     region_weight=None,
     frames_per_sample=2,
     entity_pixel_l1_weight=0.5,
     entity_pixel_edge_weight=0.2,
+    player_pixel_l1_weight=0.0,
+    player_pixel_edge_weight=0.0,
     health_pixel_l1_weight=1.0,
     damaged_health_upweight=4.0,
     generator=None,
@@ -247,6 +289,8 @@ def renderer_training_losses(
     weights = {
         "entity_pixel_l1": float(entity_pixel_l1_weight),
         "entity_pixel_edge": float(entity_pixel_edge_weight),
+        "player_pixel_l1": float(player_pixel_l1_weight),
+        "player_pixel_edge": float(player_pixel_edge_weight),
         "health_pixel_l1": float(health_pixel_l1_weight),
     }
     if min(weights.values()) < 0:
@@ -267,6 +311,7 @@ def renderer_training_losses(
             clean_prediction,
             target_rgb,
             pixel_region_mask,
+            player_region_mask=player_region_mask,
             frames_per_sample=frames_per_sample,
             generator=generator,
             hp=conditions.get("hp"),
