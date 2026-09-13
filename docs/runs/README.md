@@ -39,7 +39,7 @@ checkpoint. Machine-local exploratory outputs can remain unlisted.
 
 | Model | Run ID | Final/selected step | Parent or successor | Notes |
 |---|---|---:|---|---|
-| M3 | `m3_h100_8gpu_view_appearance_stage2_spatial4_from11500_to30000_20260913` | 17,000 | parent of the active block-causal run | View-aware appearance warm start |
+| M3 | `m3_h100_8gpu_view_appearance_stage2_spatial4_from11500_to30000_20260913` | 17,000 | parent of the stopped/resumable block-causal run | View-aware appearance warm start |
 
 ## Required fields for new entries
 
