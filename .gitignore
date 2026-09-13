@@ -12,8 +12,11 @@ checkpoints/m1/
 checkpoints/m2/
 checkpoints/m3/
 checkpoints/m4/
-.venv/
+.venv
+checkpoints/pixel_vae
+checkpoints/m3_backbone
 checkpoints/**/*.safetensors
+derived/m3
 derived/**/*.pt
 derived/**/*.jsonl
 derived/m2/episode_index.json
