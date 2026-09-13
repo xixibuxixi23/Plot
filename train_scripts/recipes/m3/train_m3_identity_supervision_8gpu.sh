@@ -10,6 +10,10 @@ identity_checkpoint=${IDENTITY_CHECKPOINT:-outputs/player_identity_real_finetune
 output_dir=${OUTPUT_DIR:-outputs/m3_identity_supervision_canary_from26000_to26500}
 checkpoint_staging_dir=${PLOT_CHECKPOINT_STAGING_DIR:-.checkpoint_staging}
 nproc=${NPROC_PER_NODE:-8}
+nnodes=${NNODES:-1}
+node_rank=${NODE_RANK:-0}
+master_addr=${MASTER_ADDR:-127.0.0.1}
+master_port=${MASTER_PORT:-29500}
 python_bin=${PYTHON_BIN:-$repo_root/.venv/bin/python}
 
 for required_path in "$python_bin" "$dataset_root" "$warm_start" "$identity_checkpoint"; do
@@ -21,8 +25,20 @@ done
 
 mkdir -p "$output_dir" "$checkpoint_staging_dir"
 
+launch_args=(--nproc_per_node="$nproc")
+if (( nnodes > 1 )); then
+  launch_args+=(
+    --nnodes="$nnodes"
+    --node_rank="$node_rank"
+    --master_addr="$master_addr"
+    --master_port="$master_port"
+  )
+else
+  launch_args+=(--standalone)
+fi
+
 CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7} \
-"$python_bin" -m torch.distributed.run --standalone --nproc_per_node="$nproc" \
+"$python_bin" -m torch.distributed.run "${launch_args[@]}" \
   train_scripts/train_renderer.py \
   --dataset-root "$dataset_root" \
   --window-index derived/m3/validated/train_c65.pt \
