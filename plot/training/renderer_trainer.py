@@ -1,4 +1,4 @@
-"""Continuous latent flow matching at multiple causal eight-frame anchors."""
+"""Continuous latent flow matching over causal, bidirectional eight-frame blocks."""
 from __future__ import annotations
 
 import torch
@@ -13,15 +13,28 @@ def slice_conditions(cond, start, end):
             for key, value in cond.items()}
 
 
+def _sample_blockwise_train_time(batch_size, total_frames, block_frames, device, generator=None):
+    """Keep the observed prefix clean and assign one noise time per future block."""
+    future_frames = total_frames - 1
+    if future_frames < block_frames or future_frames % block_frames:
+        raise ValueError("future training frames must contain complete output blocks")
+    block_time = torch.rand(
+        batch_size, future_frames // block_frames, device=device, generator=generator,
+    )
+    time = torch.zeros(batch_size, total_frames, device=device)
+    time[:, 1:] = block_time.repeat_interleave(block_frames, dim=1)
+    return time
+
+
 def renderer_flow_loss(
     model, clean, conditions, *, region_weight=None, generator=None,
     return_clean_prediction=False,
 ):
-    """Causal diffusion-forcing loss with frame zero known and frames 1:65 noisy.
+    """Block-causal diffusion-forcing loss with frame zero known.
 
-    All 64 unknown frames are scored in one forward pass. Causal attention
-    prevents a frame from seeing later frames. Supervision masks only weight
-    the loss and never enter the neural conditions.
+    All unknown frames are scored in one forward pass. Frames within an output
+    block share one noise time and attend bidirectionally; blocks remain causal.
+    Supervision masks only weight the loss and never enter neural conditions.
     """
     base = model.module if hasattr(model, "module") else model
     if clean.ndim != 5 or clean.shape[1] > base.cfg.context_frames:
@@ -34,8 +47,10 @@ def renderer_flow_loss(
     c["condition_mask"] = (torch.arange(clean.shape[1], device=clean.device)[None] == 0)
     c["condition_mask"] = c["condition_mask"].expand(len(clean), -1)
     c["action_prefix_mask"] = c["condition_mask"]
-    time = torch.zeros(clean.shape[:2], device=clean.device)
-    time[:, 1:] = torch.rand(time[:, 1:].shape, device=clean.device, generator=generator)
+    block_frames = base.cfg.block_frames
+    time = _sample_blockwise_train_time(
+        len(clean), clean.shape[1], block_frames, clean.device, generator,
+    )
     noise = torch.randn(clean.shape, device=clean.device, dtype=clean.dtype, generator=generator)
     tau = time[..., None, None, None]
     noisy = (1 - tau) * clean + tau * noise
@@ -277,6 +292,8 @@ class RendererRollout:
         if denoising_steps < 1:
             raise ValueError("denoising_steps must be positive")
         self.model, self.denoising_steps = model, denoising_steps
+        base = model.module if hasattr(model, "module") else model
+        self.block_frames = base.cfg.block_frames
         self.next_frame = None
         self.last_policy_features = None
         self.last_policy_layers = None
@@ -312,8 +329,8 @@ class RendererRollout:
     def generate(self, noise, conditions):
         if self.next_frame is None:
             raise RuntimeError("start must prefill the external first observation")
-        if noise.shape[1] != 8:
-            raise ValueError("M3 rollout must generate exactly eight new frames")
+        if noise.shape[1] != self.block_frames:
+            raise ValueError(f"M3 rollout must generate exactly {self.block_frames} new frames")
         x = noise.clone()
         cond = dict(conditions, condition_mask=torch.zeros(x.shape[:2],
                                                          device=x.device, dtype=torch.bool))
@@ -326,7 +343,7 @@ class RendererRollout:
             x = x - velocity / self.denoising_steps
         # Recompute at clean t=0; never commit an intermediate noisy candidate.
         self.last_policy_features = self._commit(x, conditions, self.next_frame)
-        self.next_frame += 8
+        self.next_frame += self.block_frames
         return x
 
     @torch.no_grad()
@@ -335,8 +352,11 @@ class RendererRollout:
         if noise.shape[1] != 64:
             raise ValueError("M3 deployment horizon requires exactly 64 noise frames")
         chunks = []
-        for start in range(0, 64, 8):
+        if 64 % self.block_frames:
+            raise ValueError("deployment horizon must contain complete output blocks")
+        for start in range(0, 64, self.block_frames):
             chunks.append(self.generate(
-                noise[:, start:start + 8], slice_conditions(conditions, start, start + 8)
+                noise[:, start:start + self.block_frames],
+                slice_conditions(conditions, start, start + self.block_frames)
             ))
         return torch.cat(chunks, dim=1)

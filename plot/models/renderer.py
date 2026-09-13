@@ -31,6 +31,7 @@ class RendererArgs:
     max_agents: int = 8
     context_frames: int = 65
     cache_frames: int = 32
+    block_frames: int = 8
     gradient_checkpointing: bool = True
     gpu_rasterizer: bool = True
     deep_condition_reinjection: bool = False
@@ -97,8 +98,12 @@ class Renderer(nn.Module):
 
     def __init__(self, cfg: RendererArgs):
         super().__init__()
-        if cfg.cache_frames < 8 or cfg.context_frames < 9:
-            raise ValueError("M3 requires room for an 8-frame output block and its prefix")
+        if cfg.block_frames < 1:
+            raise ValueError("block_frames must be positive")
+        if cfg.cache_frames < cfg.block_frames or cfg.context_frames < 1 + cfg.block_frames:
+            raise ValueError("M3 requires room for one output block and its prefix")
+        if (cfg.context_frames - 1) % cfg.block_frames:
+            raise ValueError("M3 context after the first frame must contain complete blocks")
         self.cfg = cfg
         self.voxel_embedder = nn.Embedding(cfg.num_block_classes + 1, cfg.voxel_channels)
         self.resident_encoder = ResidentConditionEncoder(cfg)
@@ -114,7 +119,8 @@ class Renderer(nn.Module):
             raster_cond_shape=(cfg.voxel_channels, cfg.input_h, cfg.input_w),
             extra_condition_dim=cfg.condition_dim, actor_condition_dim=cfg.actor_channels,
             context_window_size=cfg.context_frames, cache_window_size=cfg.cache_frames,
-            voxel_dim=48, is_causal=True, use_condition_mask=True,
+            voxel_dim=48, is_causal=True, causal_block_size=cfg.block_frames,
+            use_condition_mask=True,
             deep_condition_reinjection=cfg.deep_condition_reinjection,
             hud_condition_dim=3 if cfg.deep_condition_reinjection else 0,
             appearance_condition_dim=(

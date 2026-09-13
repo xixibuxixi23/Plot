@@ -96,6 +96,7 @@ class PixelTemporalAxialAttention(nn.Module):
         dim_head: int,
         rotary_emb: RotaryEmbedding,
         is_causal: bool = True,
+        causal_block_size: int = 1,
         qk_rms_norm: bool = False,
         flash_attn: bool = False,
     ):
@@ -108,6 +109,9 @@ class PixelTemporalAxialAttention(nn.Module):
         self.to_out = nn.Linear(self.inner_dim, dim)
         self.rotary_emb = rotary_emb
         self.is_causal = is_causal
+        if causal_block_size < 1:
+            raise ValueError("causal_block_size must be positive")
+        self.causal_block_size = causal_block_size
         self.qk_rms_norm = qk_rms_norm
         self.flash_attn = flash_attn
 
@@ -163,29 +167,41 @@ class PixelTemporalAxialAttention(nn.Module):
         if self.flash_attn:
             print("Flash Attention is currently disabled.")
         else:
-            # During prefill (T>1 with KV cache), causal mask is needed.
-            # During single-frame decode, cache only contains past frames so no mask needed.
+            # Frame zero is the observed prefix. Future frames are causal between
+            # blocks and bidirectional within each generated block.
             cached_chunk = (
                 self.is_causal and kv_cache is not None
                 and not cache_write and T > 1
             )
             if cached_chunk:
-                # SDPA's built-in non-square causal mask is upper-left aligned.
-                # Cached chunks instead need every query to see all committed
-                # history plus earlier/current positions in this chunk.
-                history_length = k.shape[2] - T
-                query_index = torch.arange(T, device=q.device)[:, None]
-                key_index = torch.arange(k.shape[2], device=q.device)[None, :]
-                attention_mask = key_index <= history_length + query_index
+                # The cache contains completed blocks only, so every query may
+                # see the complete history and all tokens in the current block.
+                attention_mask = torch.ones(T, k.shape[2], dtype=torch.bool, device=q.device)
                 x = F.scaled_dot_product_attention(
                     query=q, key=k, value=v,
                     attn_mask=attention_mask, is_causal=False,
                 )
             else:
-                use_causal = self.is_causal and (kv_cache is None or prefill)
-                x = F.scaled_dot_product_attention(
-                    query=q, key=k, value=v, is_causal=use_causal
-                )
+                use_block_mask = self.is_causal and kv_cache is None and T > 1
+                if use_block_mask:
+                    query_index = torch.arange(T, device=q.device)[:, None]
+                    key_index = torch.arange(T, device=q.device)[None, :]
+                    # The observed frame at index zero is a one-frame prefix.
+                    block_end = torch.where(
+                        query_index == 0,
+                        torch.ones_like(query_index),
+                        1 + ((query_index - 1) // self.causal_block_size + 1)
+                        * self.causal_block_size,
+                    ).clamp_max(T)
+                    attention_mask = key_index < block_end
+                    x = F.scaled_dot_product_attention(
+                        query=q, key=k, value=v,
+                        attn_mask=attention_mask, is_causal=False,
+                    )
+                else:
+                    x = F.scaled_dot_product_attention(
+                        query=q, key=k, value=v, is_causal=False
+                    )
 
         x = rearrange(x, "(B H W) h T d -> B T H W (h d)", B=B, H=H, W=W)
         x = x.to(q.dtype)
@@ -268,6 +284,7 @@ class SpatioTemporalPixelDiTBlock(nn.Module):
             num_heads,
             mlp_ratio=4.0,
             is_causal=True,
+            causal_block_size=1,
             qk_rms_norm=False,
             flash_attn=False,
             pixel_spatial_emb: Optional[RotaryEmbedding] = None,
@@ -307,6 +324,7 @@ class SpatioTemporalPixelDiTBlock(nn.Module):
             heads=num_heads,
             dim_head=hidden_size // num_heads,
             is_causal=is_causal,
+            causal_block_size=causal_block_size,
             rotary_emb=temporal_rotary_emb,
             qk_rms_norm=qk_rms_norm,
             flash_attn=self.flash_attn
@@ -716,6 +734,7 @@ class FrameDepthStackPixelDiT(nn.Module):
             context_window_size=32,
             cache_window_size=32,
             is_causal=True,
+            causal_block_size=1,
             use_condition_mask=False,
             rotary_max_freq=256,
             voxel_dim=48,
@@ -749,6 +768,7 @@ class FrameDepthStackPixelDiT(nn.Module):
         if self.cache_window_size <= 0:
             raise ValueError("cache_window_size must be positive")
         self.is_causal = is_causal
+        self.causal_block_size = causal_block_size
         self.use_condition_mask = use_condition_mask
         self.detach_raster_grad = detach_raster_grad
         self.flash_attn = flash_attn
@@ -870,6 +890,7 @@ class FrameDepthStackPixelDiT(nn.Module):
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
                     is_causal=is_causal,
+                    causal_block_size=causal_block_size,
                     qk_rms_norm=qk_rms_norm,
                     flash_attn=self.flash_attn,
                     pixel_spatial_emb=self.pixel_spatial_emb,

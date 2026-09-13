@@ -91,6 +91,7 @@ def main():
     )
     parser.add_argument("--context-frames", type=int, default=65)
     parser.add_argument("--cache-frames", type=int, default=32)
+    parser.add_argument("--block-frames", type=int, default=8)
     parser.add_argument("--hidden-size", type=int, default=1024)
     parser.add_argument("--depth", type=int, default=12)
     parser.add_argument("--heads", type=int, default=16)
@@ -228,6 +229,7 @@ def main():
         max(dataset.item_vocabulary.values()) + 1,
         context_frames=args.context_frames,
         cache_frames=args.cache_frames,
+        block_frames=args.block_frames,
         hidden_size=args.hidden_size,
         depth=args.depth,
         num_heads=args.heads,

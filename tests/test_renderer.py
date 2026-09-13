@@ -10,6 +10,7 @@ from plot.models.renderer_backbone.player_spatial_condition import ViewAwarePlay
 from plot.pipelines.renderer_pipeline import RendererMemoryBlock
 from plot.training.renderer_trainer import (
     RendererRollout,
+    _sample_blockwise_train_time,
     renderer_flow_loss,
     renderer_pixel_losses,
     renderer_training_losses,
@@ -59,18 +60,33 @@ def conditions(t=17):
     }
 
 
-def test_future_latents_and_state_do_not_change_prefix():
+def test_attention_is_bidirectional_within_blocks_and_causal_between_blocks():
     model = tiny_model().eval()
-    cond = conditions(9)
-    x, time = torch.randn(1,9,16,4,4), torch.rand(1,9)
+    cond = conditions(17)
+    x, time = torch.randn(1,17,16,4,4), torch.rand(1,17)
     with torch.no_grad():
         first = model(x, time, cond)
-        x[:,5:] += 100
-        cond["hp"][:,5:] = 1
-        cond["raster_features"][:,5:] *= 10
+        # The second block must not affect the observed prefix or first block.
+        x[:,9:] += 100
         second = model(x, time, cond)
-    torch.testing.assert_close(first[:,:5], second[:,:5])
-    assert not torch.allclose(first[:,5:], second[:,5:])
+    torch.testing.assert_close(first[:,:9], second[:,:9])
+    assert not torch.allclose(first[:,9:], second[:,9:])
+
+    within = x.clone()
+    within[:,8] += 100
+    with torch.no_grad():
+        third = model(within, time, cond)
+    torch.testing.assert_close(second[:,:1], third[:,:1])
+    assert not torch.allclose(second[:,1:8], third[:,1:8])
+
+
+def test_training_time_is_clean_for_prefix_and_shared_within_each_block():
+    time = _sample_blockwise_train_time(
+        2, 17, 8, torch.device("cpu"), torch.Generator().manual_seed(7),
+    )
+    torch.testing.assert_close(time[:, 0], torch.zeros(2))
+    torch.testing.assert_close(time[:, 1:9], time[:, 1:2].expand(-1, 8))
+    torch.testing.assert_close(time[:, 9:17], time[:, 9:10].expand(-1, 8))
 
 
 def test_training_backward_and_supervision_only_masks():
