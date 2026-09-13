@@ -26,6 +26,8 @@ The maintained M1 flow baseline and its controlled alternatives live under
 Before starting a formal or long-running job, capture its immutable code and
 data provenance with [`scripts/capture_run_manifest.py`](scripts/capture_run_manifest.py).
 Active and historical runs are indexed in [`docs/runs/README.md`](docs/runs/README.md).
+The current H200/H100 directory roles and migration exceptions are recorded in
+[`docs/machine_workspaces.md`](docs/machine_workspaces.md).
 
 ## Move to another machine
 
