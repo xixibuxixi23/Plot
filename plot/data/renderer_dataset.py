@@ -290,6 +290,10 @@ class TextAgentRendererDataset(Dataset):
             # legacy entity mask also contains mobs, attachments and the
             # first-person wield view, so it cannot measure appearance quality.
             player_masks = np.zeros_like(masks, dtype=bool)
+            identity_player_mask = np.zeros_like(masks[0], dtype=bool)
+            identity_frame = 0
+            identity_slot = 0
+            identity_pixels = 0
             if "entity_render_object_id" in data and "entity_kind" in data:
                 render_ids = data["entity_render_object_id"][start:end, entity_slots]
                 entity_kinds = data["entity_kind"].astype(str)
@@ -298,7 +302,16 @@ class TextAgentRendererDataset(Dataset):
                         continue
                     ids = render_ids[:, slot]
                     valid_ids = (ids > 0) & (ids != np.iinfo(np.uint16).max)
-                    player_masks |= (masks == ids[:, None, None]) & valid_ids[:, None, None]
+                    slot_masks = (masks == ids[:, None, None]) & valid_ids[:, None, None]
+                    player_masks |= slot_masks
+                    coverage = slot_masks.reshape(t, -1).sum(1)
+                    if len(coverage) > 1:
+                        frame = int(coverage[1:].argmax()) + 1
+                        if int(coverage[frame]) > identity_pixels:
+                            identity_pixels = int(coverage[frame])
+                            identity_frame = frame
+                            identity_slot = slot
+                            identity_player_mask = slot_masks[frame]
             weights = np.stack([cv2.resize((m != 0).astype(np.float32), self.latent_size[::-1],
                                             interpolation=cv2.INTER_AREA) for m in masks])
             actions = incoming_actions(data["action_continuous"], start, t)
@@ -366,6 +379,10 @@ class TextAgentRendererDataset(Dataset):
                 ),
                 "pixel_region_mask": torch.from_numpy(pixel_region_mask),
                 "player_region_mask": torch.from_numpy(player_region_mask),
+                "player_identity_mask": torch.from_numpy(identity_player_mask[None]),
+                "player_identity_frame": torch.tensor(identity_frame, dtype=torch.int64),
+                "player_identity_slot": torch.tensor(identity_slot, dtype=torch.int64),
+                "player_identity_valid": torch.tensor(identity_pixels >= 96),
                 "conditions": {k: torch.from_numpy(v) for k, v in condition.items()}}
 
 
@@ -392,4 +409,8 @@ def collate_renderer(samples):
     return {"conditions": result, "rgb": torch.stack([s["rgb"] for s in samples]),
             "region_weight": torch.stack([s["region_weight"] for s in samples]),
             "pixel_region_mask": torch.stack([s["pixel_region_mask"] for s in samples]),
-            "player_region_mask": torch.stack([s["player_region_mask"] for s in samples])}
+            "player_region_mask": torch.stack([s["player_region_mask"] for s in samples]),
+            "player_identity_mask": torch.stack([s["player_identity_mask"] for s in samples]),
+            "player_identity_frame": torch.stack([s["player_identity_frame"] for s in samples]),
+            "player_identity_slot": torch.stack([s["player_identity_slot"] for s in samples]),
+            "player_identity_valid": torch.stack([s["player_identity_valid"] for s in samples])}
