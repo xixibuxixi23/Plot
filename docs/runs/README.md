@@ -22,7 +22,9 @@ commit. Do not label it with the old `Polis` HEAD, which does not describe the
 working tree used by training. Commit `4b6ce14` migrates the maintained M1 flow
 code to the `plot` namespace; the immutable step-1,127,000 resume checkpoint
 strict-loads with all 288 tensors matched. A multi-GPU resume smoke test is still
-required before moving a live M1 run to PLOT.
+required before moving a live M1 run to PLOT. A detached H200 worktree at the
+current integrated source is prepared for that validation; no resume has been
+launched.
 
 The M3 branch is a linear series through BF16 alignment, pixel-health
 supervision, deep-condition experiments, view-aware appearance and later
