@@ -62,6 +62,9 @@
   },
   "publishing": {
     "hugging_face_repo": "xixibuxixi/plot-checkpoints",
-    "status": "pending Hugging Face authentication"
+    "status": "uploaded and verified",
+    "private": true,
+    "artifacts_revision": "45c6d496fc1c0fe330768102f6366cc6825f3dc5",
+    "verification": "14/14 published files matched local byte sizes; all three checkpoint LFS SHA-256 values matched the selected local files"
   }
 }
