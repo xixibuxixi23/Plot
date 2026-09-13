@@ -13,6 +13,8 @@ checkpoints/m2/
 checkpoints/m3/
 checkpoints/m4/
 .venv
+.hf_token
+.hf_upload/
 checkpoints/pixel_vae
 checkpoints/m3_backbone
 checkpoints/**/*.safetensors
