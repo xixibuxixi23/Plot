@@ -4,8 +4,10 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
+from plot.models.player_identity import crop_masked_players
 
-STATIC_KEYS = {"target_agent", "player_skin", "player_appearance_valid"}
+
+STATIC_KEYS = {"target_agent", "player_skin", "player_reference", "player_appearance_valid"}
 
 
 def slice_conditions(cond, start, end):
@@ -92,6 +94,7 @@ def select_renderer_pixel_frames(
     pixel_region_mask,
     *,
     frames_per_sample,
+    player_region_mask=None,
     hp=None,
     target_agent=None,
     generator=None,
@@ -108,6 +111,17 @@ def select_renderer_pixel_frames(
     entity_frame = torch.multinomial(
         coverage + 1e-3, 1, replacement=True, generator=generator
     ) + 1
+    player_frame = entity_frame
+    if player_region_mask is not None:
+        if player_region_mask.shape != pixel_region_mask.shape:
+            raise ValueError("player_region_mask must match pixel_region_mask")
+        player_coverage = player_region_mask[:, 1:].flatten(2).sum(-1).float()
+        sampled_player = torch.multinomial(
+            player_coverage + 1e-3, 1, replacement=True, generator=generator
+        ) + 1
+        player_frame = torch.where(
+            player_coverage.sum(1, keepdim=True) > 0, sampled_player, entity_frame
+        )
     random_frame = torch.randint(
         1, frames, (batch, 1), device=pixel_region_mask.device, generator=generator
     )
@@ -134,6 +148,15 @@ def select_renderer_pixel_frames(
 
     if frames_per_sample == 1:
         indices = torch.where(has_damage[:, None], health_frame, entity_frame)
+    elif frames_per_sample >= 3 and player_region_mask is not None:
+        extras = torch.randint(
+            1,
+            frames,
+            (batch, frames_per_sample - 3),
+            device=pixel_region_mask.device,
+            generator=generator,
+        )
+        indices = torch.cat((entity_frame, health_frame, player_frame, extras), dim=1)
     else:
         extras = torch.randint(
             1,
@@ -152,6 +175,7 @@ def renderer_pixel_losses(
     target_rgb,
     pixel_region_mask,
     *,
+    player_region_mask=None,
     frames_per_sample=1,
     generator=None,
     hp=None,
@@ -171,6 +195,8 @@ def renderer_pixel_losses(
     expected_mask = (*target_rgb.shape[:2], 1, *target_rgb.shape[-2:])
     if pixel_region_mask.shape != expected_mask:
         raise ValueError("pixel_region_mask must be [B,T,1,H,W] at RGB resolution")
+    if player_region_mask is not None and player_region_mask.shape != expected_mask:
+        raise ValueError("player_region_mask must match the RGB-resolution entity mask")
     future_frames = clean_prediction.shape[1] - 1
     if not 1 <= frames_per_sample <= future_frames:
         raise ValueError("frames_per_sample must be within the future-frame count")
@@ -186,6 +212,7 @@ def renderer_pixel_losses(
     frame_indices, target_hp = select_renderer_pixel_frames(
         pixel_region_mask,
         frames_per_sample=frames_per_sample,
+        player_region_mask=player_region_mask,
         hp=hp,
         target_agent=target_agent,
         generator=generator,
@@ -200,6 +227,13 @@ def renderer_pixel_losses(
     selected_mask = pixel_region_mask[batch_indices, frame_indices].reshape(
         batch * frames_per_sample, 1, *target_rgb.shape[-2:]
     )
+    selected_player_mask = (
+        player_region_mask[batch_indices, frame_indices].reshape(
+            batch * frames_per_sample, 1, *target_rgb.shape[-2:]
+        )
+        if player_region_mask is not None
+        else torch.zeros_like(selected_mask)
+    )
     decoded = codec.decode_for_loss(selected_latent, chunk_size=1)[:, 0]
 
     entity_l1 = _masked_mean((decoded - selected_target).abs(), selected_mask)
@@ -207,6 +241,11 @@ def renderer_pixel_losses(
     # while the RGB L1 above remains confined to the exact instance mask.
     edge_mask = F.max_pool2d(selected_mask.float(), kernel_size=5, stride=1, padding=2)
     entity_edge = _masked_edge_l1(decoded, selected_target, edge_mask)
+    player_l1 = _masked_mean((decoded - selected_target).abs(), selected_player_mask)
+    player_edge_mask = F.max_pool2d(
+        selected_player_mask.float(), kernel_size=5, stride=1, padding=2
+    )
+    player_edge = _masked_edge_l1(decoded, selected_target, player_edge_mask)
 
     height, width = target_rgb.shape[-2:]
     x0, y0, x1, y1 = health_box
@@ -223,7 +262,104 @@ def renderer_pixel_losses(
     return {
         "entity_pixel_l1": entity_l1,
         "entity_pixel_edge": entity_edge,
+        "player_pixel_l1": player_l1,
+        "player_pixel_edge": player_edge,
         "health_pixel_l1": health_l1,
+    }
+
+
+def renderer_player_identity_loss(
+    codec,
+    identity_encoder,
+    clean_prediction,
+    player_reference,
+    player_identity_mask,
+    player_identity_frame,
+    player_identity_slot,
+    player_identity_valid,
+    *,
+    player_appearance_valid=None,
+    margin=0.2,
+    negative_weight=0.5,
+):
+    """Match a generated resident crop to its canonical four-view identity.
+
+    The identity encoder is frozen. Gradients pass through its crop tower into
+    the predicted clean latent, while the canonical reference embedding is a
+    fixed target. A different resident provides an explicit negative whenever
+    one is available.
+    """
+    batch = len(clean_prediction)
+    expected_mask = (batch, 1, *player_identity_mask.shape[-2:])
+    if player_identity_mask.shape != expected_mask:
+        raise ValueError("player_identity_mask must be [B,1,H,W]")
+    for value, name in (
+        (player_identity_frame, "player_identity_frame"),
+        (player_identity_slot, "player_identity_slot"),
+        (player_identity_valid, "player_identity_valid"),
+    ):
+        if value.shape != (batch,):
+            raise ValueError(f"{name} must be [B]")
+    if (
+        player_reference.ndim != 6
+        or player_reference.shape[0] != batch
+        or player_reference.shape[2:4] != (4, 4)
+    ):
+        raise ValueError("player_reference must be [B,A,4,4,H,W]")
+    if margin < 0 or negative_weight < 0:
+        raise ValueError("identity margin and negative weight must be nonnegative")
+    indices = torch.arange(batch, device=clean_prediction.device)
+    frames = player_identity_frame.long().clamp(0, clean_prediction.shape[1] - 1)
+    slots = player_identity_slot.long().clamp(0, player_reference.shape[1] - 1)
+    selected_latent = clean_prediction[indices, frames, None]
+    decoded = codec.decode_for_loss(selected_latent, chunk_size=1)[:, 0]
+    crop, crop_valid = crop_masked_players(
+        decoded, player_identity_mask, output_size=identity_encoder.crop_size
+    )
+    valid = player_identity_valid.bool() & crop_valid
+    selected_reference = player_reference[indices, slots]
+    with torch.no_grad():
+        reference_embedding = identity_encoder.encode_reference(selected_reference)
+    crop_embedding = identity_encoder.encode_crop(crop)
+    correct_similarity = (crop_embedding * reference_embedding).sum(-1)
+
+    agent_valid = (
+        player_appearance_valid.bool().any(-1)
+        if player_appearance_valid is not None
+        else torch.ones(player_reference.shape[:2], dtype=torch.bool, device=slots.device)
+    )
+    wrong_slots = slots.clone()
+    has_negative = torch.zeros(batch, dtype=torch.bool, device=slots.device)
+    for row in range(batch):
+        choices = torch.where(
+            agent_valid[row]
+            & (torch.arange(player_reference.shape[1], device=slots.device) != slots[row])
+        )[0]
+        if len(choices):
+            wrong_slots[row] = choices[0]
+            has_negative[row] = True
+    with torch.no_grad():
+        wrong_embedding = identity_encoder.encode_reference(
+            player_reference[indices, wrong_slots]
+        )
+    wrong_similarity = (crop_embedding * wrong_embedding).sum(-1)
+    positive = 1 - correct_similarity
+    ranking = F.relu(margin + wrong_similarity - correct_similarity)
+    per_sample = positive + negative_weight * ranking * has_negative.to(ranking.dtype)
+    if valid.any():
+        loss = per_sample[valid].mean()
+        similarity = correct_similarity[valid].mean()
+        ranking_accuracy = (
+            correct_similarity[valid] > wrong_similarity[valid]
+        ).float().mean()
+    else:
+        loss = clean_prediction.sum() * 0
+        similarity = loss.detach()
+        ranking_accuracy = loss.detach()
+    return {
+        "player_identity_loss": loss,
+        "player_identity_similarity": similarity,
+        "player_identity_ranking_accuracy": ranking_accuracy,
     }
 
 
@@ -235,38 +371,59 @@ def renderer_training_losses(
     target_rgb,
     pixel_region_mask,
     *,
+    player_region_mask=None,
     region_weight=None,
     frames_per_sample=2,
     entity_pixel_l1_weight=0.5,
     entity_pixel_edge_weight=0.2,
+    player_pixel_l1_weight=0.0,
+    player_pixel_edge_weight=0.0,
     health_pixel_l1_weight=1.0,
     damaged_health_upweight=4.0,
+    identity_encoder=None,
+    player_identity_mask=None,
+    player_identity_frame=None,
+    player_identity_slot=None,
+    player_identity_valid=None,
+    player_identity_loss_weight=0.0,
+    player_identity_margin=0.2,
+    player_identity_negative_weight=0.5,
     generator=None,
 ):
     """Combine latent flow matching with sparse full-resolution supervision."""
     weights = {
         "entity_pixel_l1": float(entity_pixel_l1_weight),
         "entity_pixel_edge": float(entity_pixel_edge_weight),
+        "player_pixel_l1": float(player_pixel_l1_weight),
+        "player_pixel_edge": float(player_pixel_edge_weight),
         "health_pixel_l1": float(health_pixel_l1_weight),
     }
-    if min(weights.values()) < 0:
+    if min(*weights.values(), player_identity_loss_weight) < 0:
         raise ValueError("pixel loss weights must be nonnegative")
     use_pixels = any(weight > 0 for weight in weights.values())
+    use_identity = player_identity_loss_weight > 0
+    if use_identity and identity_encoder is None:
+        raise ValueError("player identity loss requires a frozen identity encoder")
     result = renderer_flow_loss(
         model,
         clean,
         conditions,
         region_weight=region_weight,
         generator=generator,
-        return_clean_prediction=use_pixels,
+        return_clean_prediction=use_pixels or use_identity,
     )
-    if use_pixels:
+    if use_pixels or use_identity:
         flow_loss, clean_prediction = result
+    else:
+        flow_loss = result
+        clean_prediction = None
+    if use_pixels:
         pixels = renderer_pixel_losses(
             codec,
             clean_prediction,
             target_rgb,
             pixel_region_mask,
+            player_region_mask=player_region_mask,
             frames_per_sample=frames_per_sample,
             generator=generator,
             hp=conditions.get("hp"),
@@ -274,14 +431,45 @@ def renderer_training_losses(
             damaged_health_upweight=damaged_health_upweight,
         )
     else:
-        flow_loss = result
         pixels = {name: flow_loss.new_zeros(()) for name in weights}
+    if use_identity:
+        required = {
+            "player_identity_mask": player_identity_mask,
+            "player_identity_frame": player_identity_frame,
+            "player_identity_slot": player_identity_slot,
+            "player_identity_valid": player_identity_valid,
+        }
+        missing = [name for name, value in required.items() if value is None]
+        if missing:
+            raise ValueError(f"player identity supervision is missing {missing}")
+        identity = renderer_player_identity_loss(
+            codec,
+            identity_encoder,
+            clean_prediction,
+            conditions["player_reference"],
+            player_identity_mask,
+            player_identity_frame,
+            player_identity_slot,
+            player_identity_valid,
+            player_appearance_valid=conditions.get("player_appearance_valid"),
+            margin=player_identity_margin,
+            negative_weight=player_identity_negative_weight,
+        )
+    else:
+        zero = flow_loss.new_zeros(())
+        identity = {
+            "player_identity_loss": zero,
+            "player_identity_similarity": zero,
+            "player_identity_ranking_accuracy": zero,
+        }
     auxiliary = sum(weights[name] * value for name, value in pixels.items())
+    auxiliary = auxiliary + player_identity_loss_weight * identity["player_identity_loss"]
     return {
         "total_loss": flow_loss + auxiliary,
         "flow_loss": flow_loss,
         "auxiliary_loss": auxiliary,
         **pixels,
+        **identity,
     }
 
 

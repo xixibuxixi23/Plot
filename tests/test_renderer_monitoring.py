@@ -89,11 +89,15 @@ def test_probe_uses_real_cached_64_frame_rollout(tmp_path):
         "rgb": torch.rand(1, 65, 3, 4, 4),
         "conditions": conditions(65),
         "region_weight": torch.ones(1, 65, 1, 4, 4),
+        "player_region_mask": torch.ones(1, 65, 1, 4, 4, dtype=torch.bool),
     }
     model = tiny_model().eval()
     metrics = render_probe(
         model, FakeCodec(), sample, tmp_path / "rollout.mp4", seed=7, denoising_steps=1
     )
-    assert set(metrics) == {"l1", "psnr", "entity_l1", "health_l1"}
+    assert set(metrics) == {
+        "l1", "psnr", "entity_l1", "health_l1", "player_l1",
+        "player_detail_ratio", "player_pixels",
+    }
     assert (tmp_path / "rollout.mp4").stat().st_size > 0
     assert model.core.kv_caches is None

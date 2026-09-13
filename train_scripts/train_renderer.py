@@ -22,6 +22,7 @@ from torch.nn.parallel import DistributedDataParallel
 from plot.data.renderer_dataset import TextAgentRendererDataset, collate_renderer
 from plot.models.renderer import Renderer, RendererArgs
 from plot.models.renderer_codec import RendererCodec
+from plot.models.player_identity import PlayerIdentityEncoder
 from plot.checkpoint_io import record_checkpoint_failure, staged_torch_save
 from plot.training.renderer_monitoring import render_probe, save_probe_manifest, select_renderer_probes
 from plot.training.renderer_trainer import renderer_training_losses
@@ -33,7 +34,12 @@ LOSS_NAMES = (
     "auxiliary_loss",
     "entity_pixel_l1",
     "entity_pixel_edge",
+    "player_pixel_l1",
+    "player_pixel_edge",
     "health_pixel_l1",
+    "player_identity_loss",
+    "player_identity_similarity",
+    "player_identity_ranking_accuracy",
 )
 
 
@@ -42,6 +48,30 @@ def load_weights(path):
         return load_file(str(path))
     value = torch.load(path, map_location="cpu", weights_only=True)
     return value.get("model", value)
+
+
+def build_flow_region_weight(
+    base_weight,
+    player_mask,
+    *,
+    player_upweight,
+    probability,
+    randomize,
+):
+    """Apply player-focused flow supervision on a random subset of samples."""
+    if player_upweight <= 0 or probability <= 0:
+        return base_weight
+    batch, frames = player_mask.shape[:2]
+    latent_mask = torch.nn.functional.interpolate(
+        player_mask.float().flatten(0, 1),
+        size=base_weight.shape[-2:],
+        mode="area",
+    ).unflatten(0, (batch, frames))
+    if randomize:
+        gate = (torch.rand(batch, device=base_weight.device) < probability).float()
+    else:
+        gate = base_weight.new_full((batch,), probability)
+    return base_weight + player_upweight * gate[:, None, None, None, None] * latent_mask
 
 
 def main():
@@ -76,9 +106,24 @@ def main():
         help="Warp dense four-view resident references into masked per-block appearance adapters",
     )
     parser.add_argument(
+        "--detail-preserving-appearance",
+        action="store_true",
+        help="Preserve 2x2 sub-patch resident appearance and use nonattenuating occupancy gates",
+    )
+    parser.add_argument(
+        "--entity-reference-attention",
+        action="store_true",
+        help="Cross-attend native-resolution per-resident RGBA reference tokens inside coarse ROIs",
+    )
+    parser.add_argument(
         "--freeze-base-for-appearance",
         action="store_true",
         help="Stage-one training: update only the new dense appearance modules",
+    )
+    parser.add_argument(
+        "--freeze-base-for-reference",
+        action="store_true",
+        help="Stage-one training: update only native-resolution reference encoder and adapters",
     )
     parser.add_argument(
         "--appearance-unfreeze-last-spatial-blocks",
@@ -87,6 +132,15 @@ def main():
         help=(
             "With --freeze-base-for-appearance, also train the spatial attention, spatial "
             "MLP/AdaLN in the last N DiT blocks and the final output layer"
+        ),
+    )
+    parser.add_argument(
+        "--reference-unfreeze-last-spatial-blocks",
+        type=int,
+        default=0,
+        help=(
+            "With --freeze-base-for-reference, also train the final N spatial DiT "
+            "blocks and output layer"
         ),
     )
     parser.add_argument("--context-frames", type=int, default=65)
@@ -117,6 +171,18 @@ def main():
         help="Extra latent flow weight inside entity masks; 0 keeps flow loss uniform",
     )
     parser.add_argument(
+        "--latent-player-region-upweight",
+        type=float,
+        default=0.0,
+        help="Extra flow weight inside visible human-player masks",
+    )
+    parser.add_argument(
+        "--player-mask-probability",
+        type=float,
+        default=0.5,
+        help="Probability of applying the player-region flow upweight per sample",
+    )
+    parser.add_argument(
         "--pixel-loss-frames",
         type=int,
         default=2,
@@ -124,9 +190,21 @@ def main():
     )
     parser.add_argument("--entity-pixel-l1-weight", type=float, default=0.5)
     parser.add_argument("--entity-pixel-edge-weight", type=float, default=0.2)
+    parser.add_argument("--player-pixel-l1-weight", type=float, default=0.0)
+    parser.add_argument("--player-pixel-edge-weight", type=float, default=0.0)
     parser.add_argument("--health-pixel-l1-weight", type=float, default=1.0)
     parser.add_argument("--damaged-health-upweight", type=float, default=4.0)
+    parser.add_argument("--player-identity-checkpoint")
+    parser.add_argument("--player-identity-loss-weight", type=float, default=0.0)
+    parser.add_argument("--player-identity-margin", type=float, default=0.2)
+    parser.add_argument("--player-identity-negative-weight", type=float, default=0.5)
     parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument(
+        "--unfrozen-base-lr-scale",
+        type=float,
+        default=1.0,
+        help="Learning-rate multiplier for selectively unfrozen pretrained DiT parameters",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--wandb-project", default="plot-m3")
@@ -147,15 +225,35 @@ def main():
         parser.error("--resume, --warm-start, and --backbone-checkpoint are mutually exclusive")
     if args.freeze_base_for_appearance and not args.view_aware_appearance:
         parser.error("--freeze-base-for-appearance requires --view-aware-appearance")
+    if args.detail_preserving_appearance and not args.view_aware_appearance:
+        parser.error("--detail-preserving-appearance requires --view-aware-appearance")
     if args.freeze_base_for_appearance and args.resume:
         parser.error("use --warm-start for staged appearance training")
+    if args.freeze_base_for_reference and not args.entity_reference_attention:
+        parser.error("--freeze-base-for-reference requires --entity-reference-attention")
+    if args.freeze_base_for_reference and args.resume:
+        parser.error("use --warm-start for staged reference training")
+    if args.freeze_base_for_reference and args.freeze_base_for_appearance:
+        parser.error("choose only one staged-freezing mode")
     if args.appearance_unfreeze_last_spatial_blocks and not args.freeze_base_for_appearance:
         parser.error(
             "--appearance-unfreeze-last-spatial-blocks requires "
             "--freeze-base-for-appearance"
         )
+    if args.reference_unfreeze_last_spatial_blocks and not args.freeze_base_for_reference:
+        parser.error(
+            "--reference-unfreeze-last-spatial-blocks requires --freeze-base-for-reference"
+        )
     if not 0 <= args.appearance_unfreeze_last_spatial_blocks <= args.depth:
         parser.error("--appearance-unfreeze-last-spatial-blocks must be between 0 and depth")
+    if not 0 <= args.reference_unfreeze_last_spatial_blocks <= args.depth:
+        parser.error("--reference-unfreeze-last-spatial-blocks must be between 0 and depth")
+    if not 0 <= args.player_mask_probability <= 1:
+        parser.error("--player-mask-probability must be between 0 and 1")
+    if args.unfrozen_base_lr_scale <= 0:
+        parser.error("--unfrozen-base-lr-scale must be positive")
+    if args.player_identity_loss_weight > 0 and not args.player_identity_checkpoint:
+        parser.error("--player-identity-loss-weight requires --player-identity-checkpoint")
     if (
         min(
             args.steps,
@@ -176,10 +274,16 @@ def main():
         parser.error("health-focus-oversample above 1 requires --health-focus-index")
     if min(
         args.latent_entity_region_upweight,
+        args.latent_player_region_upweight,
         args.entity_pixel_l1_weight,
         args.entity_pixel_edge_weight,
+        args.player_pixel_l1_weight,
+        args.player_pixel_edge_weight,
         args.health_pixel_l1_weight,
         args.damaged_health_upweight,
+        args.player_identity_loss_weight,
+        args.player_identity_margin,
+        args.player_identity_negative_weight,
     ) < 0:
         parser.error("region and pixel loss weights must be nonnegative")
     world = int(os.environ.get("WORLD_SIZE", "1"))
@@ -238,6 +342,8 @@ def main():
         actor_channels=args.actor_channels,
         deep_condition_reinjection=args.deep_condition_reinjection,
         view_aware_appearance=args.view_aware_appearance,
+        detail_preserving_appearance=args.detail_preserving_appearance,
+        entity_reference_attention=args.entity_reference_attention,
     )
     with torch.cuda.device(device):
         raw_model = Renderer(cfg).to(device).train()
@@ -246,7 +352,36 @@ def main():
         if rank == 0:
             print(json.dumps(report))
     codec = RendererCodec(load_weights(args.pixel_vae)).to(device).eval()
-    if args.freeze_base_for_appearance:
+    identity_encoder = None
+    if args.player_identity_checkpoint:
+        identity_checkpoint = torch.load(
+            args.player_identity_checkpoint, map_location="cpu", weights_only=False
+        )
+        identity_encoder = PlayerIdentityEncoder(
+            int(identity_checkpoint.get("embedding_dim", 128))
+        ).to(device).eval()
+        identity_encoder.crop_size = tuple(identity_checkpoint.get("crop_size", (128, 64)))
+        identity_encoder.load_state_dict(identity_checkpoint["model"], strict=True)
+        identity_encoder.requires_grad_(False)
+    if args.freeze_base_for_reference:
+        first_unfrozen_spatial_block = (
+            args.depth - args.reference_unfreeze_last_spatial_blocks
+        )
+        for name, parameter in raw_model.named_parameters():
+            trainable = name.startswith((
+                "reference_encoder.",
+                "core.entity_reference_adapters.",
+            ))
+            if args.reference_unfreeze_last_spatial_blocks:
+                trainable = trainable or name.startswith("core.final_layer.")
+                for block_index in range(first_unfrozen_spatial_block, args.depth):
+                    trainable = trainable or name.startswith((
+                        f"core.blocks.{block_index}.s_attn.",
+                        f"core.blocks.{block_index}.s_mlp.",
+                        f"core.blocks.{block_index}.s_adaLN_modulation.",
+                    ))
+            parameter.requires_grad_(trainable)
+    elif args.freeze_base_for_appearance:
         first_unfrozen_spatial_block = (
             args.depth - args.appearance_unfreeze_last_spatial_blocks
         )
@@ -254,6 +389,10 @@ def main():
             trainable = name.startswith(
                 (
                     "core.appearance_condition_embedder.",
+                    "core.appearance_detail_embedder.",
+                    "core.appearance_detail_reinjectors.",
+                    "reference_encoder.",
+                    "core.entity_reference_adapters.",
                     "core.appearance_reinjectors.",
                 )
             )
@@ -269,7 +408,25 @@ def main():
                     )
             parameter.requires_grad_(trainable)
     trainable_parameters = [p for p in raw_model.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(trainable_parameters, lr=args.lr)
+    if (
+        args.freeze_base_for_reference
+        and args.reference_unfreeze_last_spatial_blocks
+        and args.unfrozen_base_lr_scale != 1
+    ):
+        reference_parameters, base_parameters = [], []
+        for name, parameter in raw_model.named_parameters():
+            if not parameter.requires_grad:
+                continue
+            if name.startswith(("reference_encoder.", "core.entity_reference_adapters.")):
+                reference_parameters.append(parameter)
+            else:
+                base_parameters.append(parameter)
+        optimizer = torch.optim.AdamW([
+            {"params": reference_parameters, "lr": args.lr},
+            {"params": base_parameters, "lr": args.lr * args.unfrozen_base_lr_scale},
+        ])
+    else:
+        optimizer = torch.optim.AdamW(trainable_parameters, lr=args.lr)
     if rank == 0:
         print(json.dumps({
             "trainable_parameters": sum(p.numel() for p in trainable_parameters),
@@ -288,6 +445,10 @@ def main():
             "core.hud_condition_embedder.",
             "core.condition_reinjectors.",
             "core.appearance_condition_embedder.",
+            "core.appearance_detail_embedder.",
+            "core.appearance_detail_reinjectors.",
+            "reference_encoder.",
+            "core.entity_reference_adapters.",
             "core.appearance_reinjectors.",
         )
         invalid_missing = [
@@ -388,8 +549,14 @@ def main():
         "frames_per_sample": args.pixel_loss_frames,
         "entity_pixel_l1_weight": args.entity_pixel_l1_weight,
         "entity_pixel_edge_weight": args.entity_pixel_edge_weight,
+        "player_pixel_l1_weight": args.player_pixel_l1_weight,
+        "player_pixel_edge_weight": args.player_pixel_edge_weight,
         "health_pixel_l1_weight": args.health_pixel_l1_weight,
         "damaged_health_upweight": args.damaged_health_upweight,
+        "identity_encoder": identity_encoder,
+        "player_identity_loss_weight": args.player_identity_loss_weight,
+        "player_identity_margin": args.player_identity_margin,
+        "player_identity_negative_weight": args.player_identity_negative_weight,
     }
     for step in range(start_step + 1, args.steps + 1):
         optimizer.zero_grad(set_to_none=True)
@@ -424,7 +591,18 @@ def main():
                         conditions,
                         rgb,
                         batch["pixel_region_mask"].to(device),
-                        region_weight=batch["region_weight"].to(device),
+                        player_region_mask=batch["player_region_mask"].to(device),
+                        region_weight=build_flow_region_weight(
+                            batch["region_weight"].to(device),
+                            batch["player_region_mask"].to(device),
+                            player_upweight=args.latent_player_region_upweight,
+                            probability=args.player_mask_probability,
+                            randomize=True,
+                        ),
+                        player_identity_mask=batch["player_identity_mask"].to(device),
+                        player_identity_frame=batch["player_identity_frame"].to(device),
+                        player_identity_slot=batch["player_identity_slot"].to(device),
+                        player_identity_valid=batch["player_identity_valid"].to(device),
                         **loss_kwargs,
                     )
                     loss = losses["total_loss"] / args.gradient_accumulation
@@ -473,6 +651,8 @@ def main():
                 f"flow={train_log['train/flow_loss']:.6f} "
                 f"entity_l1={train_log['train/entity_pixel_l1']:.6f} "
                 f"health_l1={train_log['train/health_pixel_l1']:.6f} "
+                f"identity={train_log['train/player_identity_loss']:.6f} "
+                f"identity_sim={train_log['train/player_identity_similarity']:.4f} "
                 f"peak_reserved_max_gib={train_log['train/cuda_peak_reserved_max_gib']:.2f} "
                 f"{memory_text}",
                 flush=True,
@@ -499,7 +679,18 @@ def main():
                             condition,
                             rgb,
                             val["pixel_region_mask"].to(device),
-                            region_weight=val["region_weight"].to(device),
+                            player_region_mask=val["player_region_mask"].to(device),
+                            region_weight=build_flow_region_weight(
+                                val["region_weight"].to(device),
+                                val["player_region_mask"].to(device),
+                                player_upweight=args.latent_player_region_upweight,
+                                probability=args.player_mask_probability,
+                                randomize=False,
+                            ),
+                            player_identity_mask=val["player_identity_mask"].to(device),
+                            player_identity_frame=val["player_identity_frame"].to(device),
+                            player_identity_slot=val["player_identity_slot"].to(device),
+                            player_identity_valid=val["player_identity_valid"].to(device),
                             generator=torch.Generator(device=device).manual_seed(
                                 args.seed + number
                             ),
