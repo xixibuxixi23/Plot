@@ -1,21 +1,27 @@
-# H200 and H100 workspace map
+# Machine and workspace map
 
 This page records directory roles, not credentials or network addresses. The
 Git commit in the run registry is authoritative; a directory name or branch
 prefix does not identify the hardware that created a commit.
 
-## Current transition state
+## Current assignment (2026-09-13 UTC audit)
 
-| Machine | Development workspace | Training workspace | Rule |
-|---|---|---|---|
-| H200 | `Plot` on `main` or a short-lived feature branch | `Plot-runs/m1_h200_flow_resume1476000_20260913` is detached at the current integrated source and prepared, but not launched; legacy `Polis` retains the stopped run and outputs | Do not restart new development in `Polis`; validate compatibility before intentionally resuming from step 1,476,000. |
-| H100 | `Plot-dev` on `main` or a short-lived feature branch | `Plot-runs/m3_h100_blockcausal_resume25000_20260914` is detached at `5e874fd` and prepared, but not launched | `Plot` retains the historical M3 feature branch; use the detached worktree only if the step-25,000 run is intentionally resumed. |
+All three current cluster nodes see the same
+`/public/0_DATA/2_Avatar/zhizhou_share/rcz` filesystem. Hardware was checked
+with `nvidia-smi`: both assigned training hosts contain eight NVIDIA H200 GPUs.
+The names below are host roles, not assumptions inferred from SSH aliases.
 
-No M1 or M3 training process was active at the 2026-09-13 21:47 UTC audit.
+| Host / hardware | Assigned role | Development workspace | Training workspace | Rule |
+|---|---|---|---|---|
+| `zhizhou-avgen-2` / 8x H200 | M1 | shared `Plot` on `main` or a short-lived feature branch | shared `Plot-runs/m1_h200_flow_resume1476000_20260913`, detached and not launched | Resume only after strict-load, fixed-batch, and multi-GPU smoke checks of the selected step-1,476,000 checkpoint. Do not develop in legacy `Polis`. |
+| `js-public` / 8x H200 | M3 | shared `Plot` on `main` or a short-lived feature branch | shared `Plot-runs/m3_h200_identity_resume26000_20260914`, detached at `172f278` and not launched | The next M3 stage starts from step 26,000 plus the step-3,300 player-identity encoder; do not fall back silently to step 25,000. |
+| historical independent host / 8x H100 | checkpoint source only | historical `Plot`/`Plot-dev` workspaces | historical stopped outputs | Do not launch new training here. Preserve it until selected M3 checkpoints and evidence are verified on shared storage. |
+
+No M1 or M3 training process was active at the 2026-09-13 UTC audit.
 Preserve both output directories and do not report a prepared worktree as a
-running job. The old H200 `Polis` and H100 `Plot` workspaces predate the final
-layout and remain explicit exceptions until their outputs and branches are
-archived.
+running job. The legacy `Polis` workspace and the independent H100 workspaces
+predate the final layout and remain explicit exceptions until their outputs
+and branches are archived.
 
 ## Required layout for the next run
 

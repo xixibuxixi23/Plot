@@ -1,0 +1,67 @@
+{
+  "schema_version": "plot-selected-checkpoints-v1",
+  "updated_utc": "2026-09-13",
+  "checkpoints": [
+    {
+      "path": "m1/m1_flow_2nodes_b32_eval10k_v2/step_001476000.pt",
+      "role": "selected M1 operational resume checkpoint",
+      "bytes": 5491811243,
+      "sha256": "8f75b7a43f049a5b81b8133b8374749b5915cc1494d4c3b9d14574f9b2073048",
+      "source": "legacy Polis run m1_flow_2nodes_b32_eval10k_v2",
+      "step": 1476000,
+      "code": "legacy source hashes; compatible PLOT migration at 4b6ce14",
+      "target_worktree_commit": "639ee45869e45cc1b943f1e206ee5f74fc261eb6",
+      "validation": "torch.load with mmap succeeded; current MultiViewVoxelDiT strict-load on zhizhou-avgen-2 matched all 288 tensors; AdamW restored all 288 optimizer states at lr 1e-4"
+    },
+    {
+      "path": "m3/m3_entity_reference_stage1/step_0026000.pt",
+      "role": "selected M3 warm start for identity-supervision continuation",
+      "bytes": 1946223273,
+      "sha256": "12b4fc82f29a4c3d41dcc2ed29248115d7b96f29e045ff0b8b074bcaad63eab5",
+      "source": "historical H100 run m3_h100_8gpu_entity_reference_stage1_from25000_to27000_20260914",
+      "step": 26000,
+      "code": "launch provenance reconstructed as 60c83b9; no launch manifest",
+      "target_worktree_commit": "172f278a60a1cf38269c65d85c9a9671704cefbd",
+      "validation": "source and shared-copy SHA-256 match; current Renderer strict-load on js-public at the target worktree commit matched all 513 tensors"
+    },
+    {
+      "path": "m3/player_identity_real_finetune/step_0003300.pt",
+      "role": "frozen player-identity encoder for M3 identity supervision",
+      "bytes": 13350729,
+      "sha256": "6a2119fd6042de738fd729fa409645edbfa72b7729c35667c02fc502b30258b3",
+      "source": "historical H100 run player_identity_real_finetune_h100_5gpu_20260914",
+      "step": 3300,
+      "code": "33270b9",
+      "validation": "source and shared-copy SHA-256 match; current PlayerIdentityEncoder strict-load on js-public matched all 41 tensors"
+    }
+  ],
+  "dependencies": {
+    "m3_validated_train_index": {
+      "path": "derived/m3/validated/train_c65.pt",
+      "bytes": 344160441,
+      "sha256": "d0e483e85949bccdca3899c0c13c7d95e35f8a6b8dc3662aa8aa20d504521b7a"
+    },
+    "m3_validated_val_index": {
+      "path": "derived/m3/validated/val_id_c65.pt",
+      "bytes": 21900351,
+      "sha256": "6fdad62f55921ca5b53bc45c35d564753abfb28d646f4062b43c5dee43133399"
+    },
+    "block_vocabulary": {
+      "path": "derived/common/block_vocabulary.json",
+      "sha256": "ee8e3c89f810d2f6b49a1e07ba168ba187b85623eea168aaa324e8196060c6de",
+      "validation": "shared-cluster and historical-H100 copies match"
+    }
+  },
+  "dataset": {
+    "repository": "xixibuxixi/polis-v1",
+    "local_release": "polis_v1_20260909_360p",
+    "release_json_sha256": "d3a69316575d4e87d91a991a6fe1fadaec0baf7ab31d26f67b782b3f077ad8ba",
+    "train_jsonl_sha256": "47190499ec76ff24bbca5600ca4f1bd39fafec9b87618ac65039bf0109cb95f6",
+    "val_id_jsonl_sha256": "c2e2646dfa52a93cc8d15796e2d0019ffbf14901ead064520dc631c3e4c74b6b",
+    "validation": "shared-cluster and historical-H100 copies match for all three files"
+  },
+  "publishing": {
+    "hugging_face_repo": "xixibuxixi/plot-checkpoints",
+    "status": "pending Hugging Face authentication"
+  }
+}
