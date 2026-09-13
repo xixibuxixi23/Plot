@@ -12,6 +12,8 @@ from .renderer_backbone.render_condition import MultiAgentRenderConditionEncoder
 from .renderer_backbone.player_spatial_condition import (
     PlayerSpatialCondition,
     ViewAwarePlayerAppearance,
+    PlayerReferenceEncoder,
+    PlayerReferenceLayout,
 )
 
 
@@ -37,6 +39,7 @@ class RendererArgs:
     deep_condition_reinjection: bool = False
     view_aware_appearance: bool = False
     detail_preserving_appearance: bool = False
+    entity_reference_attention: bool = False
 
 
 class ResidentConditionEncoder(MultiAgentRenderConditionEncoder):
@@ -116,6 +119,11 @@ class Renderer(nn.Module):
             if cfg.view_aware_appearance
             else None
         )
+        self.reference_encoder = PlayerReferenceEncoder(256) if cfg.entity_reference_attention else None
+        self.reference_layout = (
+            PlayerReferenceLayout(cfg.input_h, cfg.input_w)
+            if cfg.entity_reference_attention else None
+        )
         self.core = FrameDepthStackPixelDiT(
             input_h=cfg.input_h, input_w=cfg.input_w, in_channels=cfg.in_channels,
             hidden_size=cfg.hidden_size, depth=cfg.depth, num_heads=cfg.num_heads,
@@ -132,6 +140,7 @@ class Renderer(nn.Module):
                 else 0
             ),
             detail_preserving_appearance=cfg.detail_preserving_appearance,
+            entity_reference_dim=256 if cfg.entity_reference_attention else 0,
             gradient_checkpointing=cfg.gradient_checkpointing,
             aggregation_config={} if cfg.gpu_rasterizer else None)
 
@@ -158,6 +167,16 @@ class Renderer(nn.Module):
             result["appearance_spatial_condition"] = self.appearance_spatial_encoder(
                 spatial_cond, target
             )
+        if self.reference_encoder is not None:
+            reference = cond.get("player_reference")
+            if reference is None:
+                reference = cond["player_skin"]
+            result["entity_reference_tokens"] = self.reference_encoder(
+                reference, cond.get("player_appearance_valid")
+            )
+            roi, view_weights = self.reference_layout(spatial_cond, target)
+            result["entity_reference_roi"] = roi
+            result["entity_reference_view_weights"] = view_weights
         if self.cfg.deep_condition_reinjection:
             target_hp = self.select(cond["hp"], target) / 20.0
             target_hp_delta = self.select(cond["event_cues"], target)[..., 3] / 20.0

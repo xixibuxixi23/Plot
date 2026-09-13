@@ -83,9 +83,19 @@ def main():
         help="Preserve 2x2 sub-patch resident appearance and use nonattenuating occupancy gates",
     )
     parser.add_argument(
+        "--entity-reference-attention",
+        action="store_true",
+        help="Cross-attend native-resolution per-resident RGBA reference tokens inside coarse ROIs",
+    )
+    parser.add_argument(
         "--freeze-base-for-appearance",
         action="store_true",
         help="Stage-one training: update only the new dense appearance modules",
+    )
+    parser.add_argument(
+        "--freeze-base-for-reference",
+        action="store_true",
+        help="Stage-one training: update only native-resolution reference encoder and adapters",
     )
     parser.add_argument(
         "--appearance-unfreeze-last-spatial-blocks",
@@ -160,6 +170,12 @@ def main():
         parser.error("--detail-preserving-appearance requires --view-aware-appearance")
     if args.freeze_base_for_appearance and args.resume:
         parser.error("use --warm-start for staged appearance training")
+    if args.freeze_base_for_reference and not args.entity_reference_attention:
+        parser.error("--freeze-base-for-reference requires --entity-reference-attention")
+    if args.freeze_base_for_reference and args.resume:
+        parser.error("use --warm-start for staged reference training")
+    if args.freeze_base_for_reference and args.freeze_base_for_appearance:
+        parser.error("choose only one staged-freezing mode")
     if args.appearance_unfreeze_last_spatial_blocks and not args.freeze_base_for_appearance:
         parser.error(
             "--appearance-unfreeze-last-spatial-blocks requires "
@@ -252,6 +268,7 @@ def main():
         deep_condition_reinjection=args.deep_condition_reinjection,
         view_aware_appearance=args.view_aware_appearance,
         detail_preserving_appearance=args.detail_preserving_appearance,
+        entity_reference_attention=args.entity_reference_attention,
     )
     with torch.cuda.device(device):
         raw_model = Renderer(cfg).to(device).train()
@@ -260,7 +277,13 @@ def main():
         if rank == 0:
             print(json.dumps(report))
     codec = RendererCodec(load_weights(args.pixel_vae)).to(device).eval()
-    if args.freeze_base_for_appearance:
+    if args.freeze_base_for_reference:
+        for name, parameter in raw_model.named_parameters():
+            parameter.requires_grad_(name.startswith((
+                "reference_encoder.",
+                "core.entity_reference_adapters.",
+            )))
+    elif args.freeze_base_for_appearance:
         first_unfrozen_spatial_block = (
             args.depth - args.appearance_unfreeze_last_spatial_blocks
         )
@@ -270,6 +293,8 @@ def main():
                     "core.appearance_condition_embedder.",
                     "core.appearance_detail_embedder.",
                     "core.appearance_detail_reinjectors.",
+                    "reference_encoder.",
+                    "core.entity_reference_adapters.",
                     "core.appearance_reinjectors.",
                 )
             )
@@ -306,6 +331,8 @@ def main():
             "core.appearance_condition_embedder.",
             "core.appearance_detail_embedder.",
             "core.appearance_detail_reinjectors.",
+            "reference_encoder.",
+            "core.entity_reference_adapters.",
             "core.appearance_reinjectors.",
         )
         invalid_missing = [

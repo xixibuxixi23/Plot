@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 
 
-STATIC_KEYS = {"target_agent", "player_skin", "player_appearance_valid"}
+STATIC_KEYS = {"target_agent", "player_skin", "player_reference", "player_appearance_valid"}
 
 
 def slice_conditions(cond, start, end):

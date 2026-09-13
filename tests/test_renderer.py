@@ -122,7 +122,6 @@ def test_deep_condition_reinjection_is_exact_warm_start_and_trainable():
         ))
         for key in incompatible.missing_keys
     )
-
     cond = conditions(9)
     cond["hp"][:, 4:, 0] = 12
     cond["event_cues"][:, 4, 0, 3] = -8
@@ -180,6 +179,7 @@ def test_detail_preserving_appearance_is_an_exact_trainable_warm_start():
         ))
         for key in incompatible.missing_keys
     )
+
     cond = conditions(9)
     x, time = torch.randn(1, 9, 16, 4, 4), torch.rand(1, 9)
     with torch.no_grad():
@@ -193,6 +193,43 @@ def test_detail_preserving_appearance_is_an_exact_trainable_warm_start():
         adapter.to_output.weight.grad is not None
         and adapter.to_output.weight.grad.abs().sum() > 0
         for adapter in detail.core.appearance_detail_reinjectors
+    )
+
+
+def test_entity_reference_attention_is_an_exact_trainable_warm_start():
+    base = tiny_model()
+    reference = Renderer(replace(
+        base.cfg,
+        view_aware_appearance=True,
+        entity_reference_attention=True,
+    )).eval()
+    incompatible = reference.load_state_dict(base.state_dict(), strict=False)
+    assert not incompatible.unexpected_keys
+    assert incompatible.missing_keys
+    assert all(
+        key.startswith((
+            "appearance_spatial_encoder.",
+            "core.appearance_condition_embedder.",
+            "core.appearance_reinjectors.",
+            "reference_encoder.",
+            "core.entity_reference_adapters.",
+        ))
+        for key in incompatible.missing_keys
+    )
+    cond = conditions(9)
+    cond["player_reference"] = torch.rand(1, 2, 4, 4, 32, 16)
+    x, time = torch.randn(1, 9, 16, 4, 4), torch.rand(1, 9)
+    with torch.no_grad():
+        expected = base(x, time, cond)
+        actual = reference(x, time, cond)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+    reference.train()
+    reference(x, time, cond).square().mean().backward()
+    assert all(
+        adapter.to_output.weight.grad is not None
+        and adapter.to_output.weight.grad.abs().sum() > 0
+        for adapter in reference.core.entity_reference_adapters
     )
 
 
@@ -371,7 +408,9 @@ def test_continuous_dataset_preserves_state_time_and_splits(tmp_path, monkeypatc
         root = tmp_path / 'players' / f'agent{slot}'
         root.mkdir(parents=True)
         for view in ('front','back','left','right'):
-            assert cv2.imwrite(str(root / f'{view}.png'), np.full((4,4,4),255,np.uint8))
+            reference = np.full((8,4,4),255,np.uint8)
+            reference[0, 0] = [127, 63, 255, 0]
+            assert cv2.imwrite(str(root / f'{view}.png'), reference)
     monkeypatch.setattr(module, '_read_video_frames', lambda path, indices, size:
                         {index: np.full((3,*size),index/255.,np.float32) for index in indices})
     ds = module.TextAgentRendererDataset(tmp_path,BlockVocabulary((0,7)),context_frames=17,
@@ -387,6 +426,8 @@ def test_continuous_dataset_preserves_state_time_and_splits(tmp_path, monkeypatc
     assert sample['pixel_region_mask'].dtype == torch.bool
     assert sample['pixel_region_mask'].shape == (17, 1, 4, 4)
     assert sample['player_region_mask'].all()
+    assert sample['conditions']['player_reference'].shape == (2, 4, 4, 8, 4)
+    assert sample['conditions']['player_reference'][..., 0, 0].count_nonzero() == 0
     assert not {'instance_mask','crop_anchor','behavior_text'} & cond.keys()
     paired = module.TextAgentRendererDataset(
         tmp_path, BlockVocabulary((0,7)), context_frames=17,
@@ -398,6 +439,7 @@ def test_continuous_dataset_preserves_state_time_and_splits(tmp_path, monkeypatc
     assert flat['rgb'].shape[:2] == (2, 17)
     assert flat['pixel_region_mask'].shape == (2, 17, 1, 4, 4)
     assert flat['player_region_mask'].shape == (2, 17, 1, 4, 4)
+    assert flat['conditions']['player_reference'].shape == (2, 2, 4, 4, 8, 4)
 
     uniform = module.TextAgentRendererDataset(
         tmp_path, BlockVocabulary((0,7)), context_frames=17,

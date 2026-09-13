@@ -398,6 +398,35 @@ class AlignedAppearanceAdapter(nn.Module):
         value = F.silu(self.to_value(self.reference_norm(reference)))
         return self.to_output(value) * agreement * mask
 
+
+class EntityReferenceAdapter(nn.Module):
+    """Route each spatial token to detailed tokens of residents near its ROI."""
+
+    def __init__(self, hidden_size, reference_dim, attention_dim=64, value_dim=256):
+        super().__init__()
+        self.x_norm = nn.LayerNorm(hidden_size)
+        self.reference_norm = nn.LayerNorm(reference_dim)
+        self.to_query = nn.Linear(hidden_size, attention_dim, bias=False)
+        self.to_key = nn.Linear(reference_dim, attention_dim, bias=False)
+        self.to_value = nn.Linear(reference_dim, value_dim)
+        self.to_output = nn.Linear(value_dim, hidden_size)
+        self.scale = attention_dim ** -.5
+
+    def forward(self, x, reference, roi):
+        # x [B,T,H,W,D], reference [B,T,A,N,R], roi [B,T,A,H,W]
+        bsz, frames, height, width, _ = x.shape
+        spatial = height * width
+        query = self.to_query(self.x_norm(x)).flatten(2, 3)
+        normalized = self.reference_norm(reference)
+        key, value = self.to_key(normalized), self.to_value(normalized)
+        score = torch.einsum("btsh,btanh->btsan", query, key) * self.scale
+        routing = roi.flatten(3).permute(0, 1, 3, 2).clamp(0, 1)
+        score = score + routing.clamp_min(1e-6).log()[..., None]
+        attention = score.flatten(3).softmax(-1).unflatten(3, score.shape[3:])
+        output = torch.einsum("btsan,btanv->btsv", attention, value)
+        output *= routing.amax(-1, keepdim=True)
+        return self.to_output(output).unflatten(2, (height, width))
+
 class PixelFinalLayer(nn.Module):
     """
     The final layer of pixel DiT.
@@ -684,6 +713,7 @@ class FrameDepthStackPixelDitDenoiserArgs:
     hud_condition_dim : int = 0
     appearance_condition_dim : int = 0
     detail_preserving_appearance : bool = False
+    entity_reference_dim : int = 0
     context_window_size : int = 16
     cache_window_size : int = 32
     is_causal : bool = True
@@ -733,6 +763,7 @@ class FrameDepthStackPixelDiT(nn.Module):
             hud_condition_dim=0,
             appearance_condition_dim=0,
             detail_preserving_appearance=False,
+            entity_reference_dim=0,
             context_window_size=32,
             cache_window_size=32,
             is_causal=True,
@@ -863,6 +894,12 @@ class FrameDepthStackPixelDiT(nn.Module):
             self.appearance_reinjectors = None
             self.appearance_detail_embedder = None
             self.appearance_detail_reinjectors = None
+        if entity_reference_dim > 0:
+            self.entity_reference_adapters = nn.ModuleList(
+                [EntityReferenceAdapter(hidden_size, entity_reference_dim) for _ in range(depth)]
+            )
+        else:
+            self.entity_reference_adapters = None
 
         #spatial encodings
         self.pixel_spatial_emb = RotaryEmbedding(
@@ -958,6 +995,10 @@ class FrameDepthStackPixelDiT(nn.Module):
             # Exact warm start: the existing appearance path is unchanged until
             # the new detail adapters learn to use sub-patch features.
             for adapter in self.appearance_detail_reinjectors:
+                nn.init.constant_(adapter.to_output.weight, 0)
+                nn.init.constant_(adapter.to_output.bias, 0)
+        if self.entity_reference_adapters is not None:
+            for adapter in self.entity_reference_adapters:
                 nn.init.constant_(adapter.to_output.weight, 0)
                 nn.init.constant_(adapter.to_output.bias, 0)
 
@@ -1152,6 +1193,8 @@ class FrameDepthStackPixelDiT(nn.Module):
         appearance_mask = None
         appearance_detail_tokens = None
         appearance_detail_mask = None
+        entity_reference = None
+        entity_reference_roi = None
         if self.appearance_condition_embedder is not None:
             appearance_condition = external_cond.get("appearance_spatial_condition")
             expected = (
@@ -1186,6 +1229,30 @@ class FrameDepthStackPixelDiT(nn.Module):
             ).clamp(0, 1)
             appearance_mask = rearrange(
                 appearance_mask, "(b t) c h w -> b t h w c", b=B, t=T
+            )
+        if self.entity_reference_adapters is not None:
+            reference = external_cond.get("entity_reference_tokens")
+            view_weights = external_cond.get("entity_reference_view_weights")
+            roi = external_cond.get("entity_reference_roi")
+            if reference is None or reference.ndim != 5 or reference.shape[0] != B:
+                raise ValueError("entity_reference_tokens must be [B,A,V,N,D]")
+            if view_weights is None or roi is None:
+                raise ValueError("entity reference layout tensors are required")
+            if view_weights.shape[:3] != (B, T, reference.shape[1]):
+                raise ValueError("entity_reference_view_weights must be [B,T,A,V]")
+            if roi.shape != (B, T, reference.shape[1], H, W):
+                raise ValueError("entity_reference_roi must be [B,T,A,H,W]")
+            entity_reference = torch.einsum(
+                "btav,bavnd->btand", view_weights.to(x.dtype), reference.to(x.dtype)
+            )
+            entity_reference_roi = F.max_pool2d(
+                roi.flatten(0, 2).unsqueeze(1).to(x.dtype), self.patch_size, self.patch_size
+            )
+            # One-token expansion tolerates pose and bbox errors without making
+            # the identity reference globally accessible.
+            entity_reference_roi = F.max_pool2d(entity_reference_roi, 3, 1, 1)
+            entity_reference_roi = entity_reference_roi.squeeze(1).unflatten(
+                0, (B, T, reference.shape[1])
             )
         # embed noise steps
         t = rearrange(t, "b t -> (b t)")
@@ -1283,6 +1350,20 @@ class FrameDepthStackPixelDiT(nn.Module):
                         x, appearance_detail_tokens, appearance_detail_mask
                     )
                 x = x + detail_delta
+            if self.entity_reference_adapters is not None:
+                reference_adapter = self.entity_reference_adapters[i]
+                if self.gradient_checkpointing and self.training:
+                    reference_delta = checkpoint(
+                        lambda x_, reference_, roi_, adapter_=reference_adapter: adapter_(
+                            x_, reference_, roi_
+                        ),
+                        x, entity_reference, entity_reference_roi, use_reentrant=False,
+                    )
+                else:
+                    reference_delta = reference_adapter(
+                        x, entity_reference, entity_reference_roi
+                    )
+                x = x + reference_delta
             cache = self.kv_caches[i] if self.kv_caches else None
             if self.gradient_checkpointing and self.training and cache is None:
                 x = checkpoint(

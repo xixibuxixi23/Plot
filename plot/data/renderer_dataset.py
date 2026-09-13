@@ -324,16 +324,25 @@ class TextAgentRendererDataset(Dataset):
                     if recipient == f"agent{slot}":
                         cues[frame, slot, 2] += 1
         skins = []
+        references = []
         for slot in range(a):
             views = []
+            reference_views = []
             for view in ("front", "back", "left", "right"):
                 image_path = path / "players" / f"agent{slot}" / f"{view}.png"
                 image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
                 if image is None:
                     raise ValueError(f"missing appearance view: {image_path}")
                 image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGBA if image.shape[-1] == 4 else cv2.COLOR_BGR2RGBA)
+                reference = image.astype(np.float32) / 255.
+                # Preserve the native 256x128 matte and aspect ratio. Clearing
+                # transparent RGB avoids hidden PNG colors leaking through
+                # interpolation in the reference encoder.
+                reference[..., :3] *= reference[..., 3:4]
+                reference_views.append(np.moveaxis(reference, -1, 0))
                 views.append(np.moveaxis(cv2.resize(image, (64, 64)).astype(np.float32) / 255., -1, 0))
             skins.append(np.stack(views))
+            references.append(np.stack(reference_views))
         videos = manifest.get("agent_video_files") or [f"rgb_agent{i}.mp4" for i in range(a)]
         decoded = _read_video_frames(path / videos[target], range(start, end), self.image_size)
         rgb = np.stack([decoded[i] for i in range(start, end)])
@@ -346,6 +355,7 @@ class TextAgentRendererDataset(Dataset):
             "hp": health, "yaw_pitch": angles, "held_item": held, "resident_type": types,
             "event_cues": cues, "action": actions, "player_valid": active,
             "player_skin": np.stack(skins), "player_appearance_valid": np.ones((a, 4), bool),
+            "player_reference": np.stack(references),
             "condition_mask": np.arange(t) == 0, "action_prefix_mask": np.arange(t) == 0,
         }
         pixel_region_mask = (masks != 0)[:, None]
@@ -370,7 +380,9 @@ def collate_renderer(samples):
         values = []
         for sample in samples:
             value = sample["conditions"][key]
-            axis = 1 if key in temporal_agent else 0 if key in {"player_skin", "player_appearance_valid"} else None
+            axis = 1 if key in temporal_agent else 0 if key in {
+                "player_skin", "player_reference", "player_appearance_valid"
+            } else None
             if axis is not None and value.shape[axis] < max_agents:
                 shape = list(value.shape)
                 shape[axis] = max_agents - shape[axis]
