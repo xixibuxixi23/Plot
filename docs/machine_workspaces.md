@@ -8,7 +8,7 @@ prefix does not identify the hardware that created a commit.
 
 | Machine | Development workspace | Training workspace | Rule |
 |---|---|---|---|
-| H200 | `Plot` on `main` or a short-lived feature branch | legacy `Polis` contains the stopped M1 run | Do not restart new development in `Polis`; the next M1 run must use a detached PLOT worktree. |
+| H200 | `Plot` on `main` or a short-lived feature branch | `Plot-runs/m1_h200_flow_resume1476000_20260913` is detached at the current integrated source and prepared, but not launched; legacy `Polis` retains the stopped run and outputs | Do not restart new development in `Polis`; validate compatibility before intentionally resuming from step 1,476,000. |
 | H100 | `Plot-dev` on `main` or a short-lived feature branch | `Plot-runs/m3_h100_blockcausal_resume25000_20260914` is detached at `5e874fd` and prepared, but not launched | `Plot` retains the historical M3 feature branch; use the detached worktree only if the step-25,000 run is intentionally resumed. |
 
 No M1 or M3 training process was active at the 2026-09-13 21:47 UTC audit.
