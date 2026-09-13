@@ -1,10 +1,10 @@
 # PLOT
 
-PLOT is the portable training repository for **Multi-Inhabitant World Models
+PLOT is the canonical source repository for **Multi-Inhabitant World Models
 with Writable 3D Memory**. It contains the maintained M1–M4 model code, dataset
 adapters, training entry points, prepared indexes, fixed upstream weights and a
-relocatable Linux training environment. The paper, exploratory experiments and
-old run outputs live outside this repository.
+relocatable Linux training environment. Large datasets, run outputs and learned
+checkpoints remain outside Git.
 
 | Component | Entry point | Purpose |
 |---|---|---|
@@ -17,7 +17,11 @@ old run outputs live outside this repository.
 `dataset_toolkits/` derives model-specific indexes without modifying the public
 continuous release. See [project layout](docs/project_layout.md), [data
 setup](docs/data.md), [training commands](docs/train.md), and the
-[Git collaboration workflow](docs/collaboration.md).
+[project management runbook](docs/project_management.md).
+
+Before starting a formal or long-running job, capture its immutable code and
+data provenance with [`scripts/capture_run_manifest.py`](scripts/capture_run_manifest.py).
+Active and historical runs are indexed in [`docs/runs/README.md`](docs/runs/README.md).
 
 ## Move to another machine
 
