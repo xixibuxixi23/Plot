@@ -8,7 +8,7 @@ checkpoints remain outside Git.
 
 | Component | Entry point | Purpose |
 |---|---|---|
-| M1 | `train_scripts/train_geometry_fill.py` | initialize a 48³ writable memory from multiple views |
+| M1 | `experiments/m1/train_multiview_persist_full.py` | current two-view PERSIST flow baseline for 48³ memory |
 | M2 | `train_scripts/train_transition_full.py` | predict kinematic residuals and sparse 13³ writes |
 | M3 | `train_scripts/train_renderer.py` | causal 65-frame diffusion-forcing renderer |
 | M4 | `train_scripts/train_policy.py` | predict an eight-action chunk from completed M3 frames |
@@ -18,6 +18,10 @@ checkpoints remain outside Git.
 continuous release. See [project layout](docs/project_layout.md), [data
 setup](docs/data.md), [training commands](docs/train.md), and the
 [project management runbook](docs/project_management.md).
+
+The maintained M1 flow baseline and its controlled alternatives live under
+`experiments/m1/` while their reusable geometry and codec components remain in
+`plot/`. The older geometry-fill entry points are retained for comparison.
 
 Before starting a formal or long-running job, capture its immutable code and
 data provenance with [`scripts/capture_run_manifest.py`](scripts/capture_run_manifest.py).
