@@ -287,3 +287,92 @@ class ViewAwarePlayerAppearance(nn.Module):
             view_weights[..., :, None, None] * composite_weights[..., None, :, :]
         ).sum(dim=2)
         return torch.cat((rgb, occupancy, inverse_depth, uv, selected_view), dim=2).contiguous()
+
+
+class PlayerReferenceLayout(nn.Module):
+    """Return per-resident coarse ROIs and camera-relative view weights.
+
+    The ROI is deliberately only a routing prior. It is wider than the legacy
+    billboard so reference attention can learn limbs and correct projection
+    errors instead of receiving a falsely precise target silhouette.
+    """
+
+    def __init__(self, height=36, width=64, player_height=1.8, player_aspect=.55,
+                 edge_sharpness=1.5, view_sharpness=8.0):
+        super().__init__()
+        self.height, self.width = int(height), int(width)
+        self.player_height, self.player_aspect = float(player_height), float(player_aspect)
+        self.edge_sharpness, self.view_sharpness = float(edge_sharpness), float(view_sharpness)
+
+    def forward(self, cond: dict, target: torch.Tensor):
+        position, yaw = cond["player_position"], cond["yaw_pitch"][..., 0]
+        valid = cond["player_valid"].bool()
+        bsz, timesteps, agents, _ = position.shape
+        camera_position = ViewAwarePlayerAppearance._select_agent(cond["camera_position"], target)
+        camera_direction = ViewAwarePlayerAppearance._select_agent(cond["camera_direction"], target)
+        fov_x = ViewAwarePlayerAppearance._select_agent(cond["camera"], target)[..., -1]
+        target_valid = ViewAwarePlayerAppearance._select_agent(valid, target)
+        dtype = position.dtype
+        forward = F.normalize(camera_direction, dim=-1, eps=1e-6)
+        world_down = torch.tensor((0., 0., -1.), device=position.device, dtype=dtype)
+        right = F.normalize(torch.cross(world_down.expand_as(forward), forward, dim=-1), dim=-1, eps=1e-6)
+        down = F.normalize(torch.cross(forward, right, dim=-1), dim=-1, eps=1e-6)
+        feet, head = position, position.clone()
+        head[..., 2] += self.player_height
+        tan_x = torch.tan(fov_x.clamp(.05, 3.) / 2)[..., None]
+        foot_u, foot_v, foot_depth = ViewAwarePlayerAppearance._project(
+            feet, camera_position[:, :, None], forward[:, :, None], right[:, :, None],
+            down[:, :, None], tan_x, self.height, self.width)
+        head_u, head_v, head_depth = ViewAwarePlayerAppearance._project(
+            head, camera_position[:, :, None], forward[:, :, None], right[:, :, None],
+            down[:, :, None], tan_x, self.height, self.width)
+        center_u, center_v = (foot_u + head_u) / 2, (foot_v + head_v) / 2
+        box_h = (foot_v - head_v).abs().clamp(1., float(self.height))
+        box_w = (box_h * self.player_aspect).clamp(1., float(self.width))
+        grid_y = torch.arange(self.height, device=position.device, dtype=dtype)
+        grid_x = torch.arange(self.width, device=position.device, dtype=dtype)
+        dy = (grid_y.view(1,1,1,self.height,1) - center_v[...,None,None]).abs()
+        dx = (grid_x.view(1,1,1,1,self.width) - center_u[...,None,None]).abs()
+        roi = torch.sigmoid((box_h[...,None,None]/2-dy)*self.edge_sharpness)
+        roi = roi * torch.sigmoid((box_w[...,None,None]/2-dx)*self.edge_sharpness)
+        visible = valid & target_valid[...,None] & (((foot_depth + head_depth) / 2) > .05)
+        slots = torch.arange(agents, device=position.device)[None,None]
+        visible &= slots != target[:,None,None]
+        roi *= visible[...,None,None].to(dtype)
+
+        source_forward = torch.stack((yaw.sin(), yaw.cos()), dim=-1)
+        source_right = torch.stack((source_forward[...,1], -source_forward[...,0]), dim=-1)
+        to_camera = F.normalize(camera_position[:,:,None,:2]-position[...,:2], dim=-1, eps=1e-6)
+        front = (to_camera * source_forward).sum(-1)
+        right_score = (to_camera * source_right).sum(-1)
+        view_weights = torch.stack((front, -front, -right_score, right_score), -1)
+        view_weights = (view_weights * self.view_sharpness).softmax(-1)
+        view_weights *= visible[...,None].to(dtype)
+        return roi.contiguous(), view_weights.contiguous()
+
+
+class PlayerReferenceEncoder(nn.Module):
+    """Encode native RGBA views into spatial tokens without square resizing."""
+
+    def __init__(self, output_dim=256, grid_size=(8, 4)):
+        super().__init__()
+        self.output_dim, self.grid_size = int(output_dim), tuple(grid_size)
+        self.encoder = nn.Sequential(
+            nn.Conv2d(4, 32, 3, 2, 1), nn.SiLU(),
+            nn.Conv2d(32, 64, 3, 2, 1), nn.SiLU(),
+            nn.Conv2d(64, 128, 3, 2, 1), nn.SiLU(),
+            nn.Conv2d(128, output_dim, 3, 2, 1), nn.SiLU(),
+            nn.AdaptiveAvgPool2d(self.grid_size),
+        )
+        self.view_embedding = nn.Parameter(torch.randn(4, output_dim) * .02)
+
+    def forward(self, reference, valid=None):
+        if reference.ndim != 6 or reference.shape[2:4] != (4, 4):
+            raise ValueError("player_reference must be [B,A,4,4,H,W]")
+        bsz, agents, views = reference.shape[:3]
+        encoded = self.encoder(reference.flatten(0, 2))
+        encoded = encoded.flatten(2).transpose(1, 2).unflatten(0, (bsz, agents, views))
+        encoded = encoded + self.view_embedding[None,None,:,None].to(encoded.dtype)
+        if valid is not None:
+            encoded *= valid.to(encoded.dtype)[...,None,None]
+        return encoded

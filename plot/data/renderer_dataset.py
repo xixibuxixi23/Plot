@@ -286,6 +286,32 @@ class TextAgentRendererDataset(Dataset):
             masks = data["instance_mask"][start:end, target]
             if masks.dtype != np.uint16:
                 raise ValueError("instance_mask must retain the raw uint16 entity IDs")
+            # Keep a separate mask for visible, non-camera human players.  The
+            # legacy entity mask also contains mobs, attachments and the
+            # first-person wield view, so it cannot measure appearance quality.
+            player_masks = np.zeros_like(masks, dtype=bool)
+            identity_player_mask = np.zeros_like(masks[0], dtype=bool)
+            identity_frame = 0
+            identity_slot = 0
+            identity_pixels = 0
+            if "entity_render_object_id" in data and "entity_kind" in data:
+                render_ids = data["entity_render_object_id"][start:end, entity_slots]
+                entity_kinds = data["entity_kind"].astype(str)
+                for slot, entity_slot in enumerate(entity_slots):
+                    if slot == target or entity_kinds[entity_slot] != "player":
+                        continue
+                    ids = render_ids[:, slot]
+                    valid_ids = (ids > 0) & (ids != np.iinfo(np.uint16).max)
+                    slot_masks = (masks == ids[:, None, None]) & valid_ids[:, None, None]
+                    player_masks |= slot_masks
+                    coverage = slot_masks.reshape(t, -1).sum(1)
+                    if len(coverage) > 1:
+                        frame = int(coverage[1:].argmax()) + 1
+                        if int(coverage[frame]) > identity_pixels:
+                            identity_pixels = int(coverage[frame])
+                            identity_frame = frame
+                            identity_slot = slot
+                            identity_player_mask = slot_masks[frame]
             weights = np.stack([cv2.resize((m != 0).astype(np.float32), self.latent_size[::-1],
                                             interpolation=cv2.INTER_AREA) for m in masks])
             actions = incoming_actions(data["action_continuous"], start, t)
@@ -311,16 +337,25 @@ class TextAgentRendererDataset(Dataset):
                     if recipient == f"agent{slot}":
                         cues[frame, slot, 2] += 1
         skins = []
+        references = []
         for slot in range(a):
             views = []
+            reference_views = []
             for view in ("front", "back", "left", "right"):
                 image_path = path / "players" / f"agent{slot}" / f"{view}.png"
                 image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
                 if image is None:
                     raise ValueError(f"missing appearance view: {image_path}")
                 image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGBA if image.shape[-1] == 4 else cv2.COLOR_BGR2RGBA)
+                reference = image.astype(np.float32) / 255.
+                # Preserve the native 256x128 matte and aspect ratio. Clearing
+                # transparent RGB avoids hidden PNG colors leaking through
+                # interpolation in the reference encoder.
+                reference[..., :3] *= reference[..., 3:4]
+                reference_views.append(np.moveaxis(reference, -1, 0))
                 views.append(np.moveaxis(cv2.resize(image, (64, 64)).astype(np.float32) / 255., -1, 0))
             skins.append(np.stack(views))
+            references.append(np.stack(reference_views))
         videos = manifest.get("agent_video_files") or [f"rgb_agent{i}.mp4" for i in range(a)]
         decoded = _read_video_frames(path / videos[target], range(start, end), self.image_size)
         rgb = np.stack([decoded[i] for i in range(start, end)])
@@ -333,14 +368,21 @@ class TextAgentRendererDataset(Dataset):
             "hp": health, "yaw_pitch": angles, "held_item": held, "resident_type": types,
             "event_cues": cues, "action": actions, "player_valid": active,
             "player_skin": np.stack(skins), "player_appearance_valid": np.ones((a, 4), bool),
+            "player_reference": np.stack(references),
             "condition_mask": np.arange(t) == 0, "action_prefix_mask": np.arange(t) == 0,
         }
         pixel_region_mask = (masks != 0)[:, None]
+        player_region_mask = player_masks[:, None]
         return {"rgb": torch.from_numpy(rgb),
                 "region_weight": torch.from_numpy(
                     1 + self.entity_region_upweight * weights[:, None]
                 ),
                 "pixel_region_mask": torch.from_numpy(pixel_region_mask),
+                "player_region_mask": torch.from_numpy(player_region_mask),
+                "player_identity_mask": torch.from_numpy(identity_player_mask[None]),
+                "player_identity_frame": torch.tensor(identity_frame, dtype=torch.int64),
+                "player_identity_slot": torch.tensor(identity_slot, dtype=torch.int64),
+                "player_identity_valid": torch.tensor(identity_pixels >= 96),
                 "conditions": {k: torch.from_numpy(v) for k, v in condition.items()}}
 
 
@@ -355,7 +397,9 @@ def collate_renderer(samples):
         values = []
         for sample in samples:
             value = sample["conditions"][key]
-            axis = 1 if key in temporal_agent else 0 if key in {"player_skin", "player_appearance_valid"} else None
+            axis = 1 if key in temporal_agent else 0 if key in {
+                "player_skin", "player_reference", "player_appearance_valid"
+            } else None
             if axis is not None and value.shape[axis] < max_agents:
                 shape = list(value.shape)
                 shape[axis] = max_agents - shape[axis]
@@ -364,4 +408,9 @@ def collate_renderer(samples):
         result[key] = torch.stack(values)
     return {"conditions": result, "rgb": torch.stack([s["rgb"] for s in samples]),
             "region_weight": torch.stack([s["region_weight"] for s in samples]),
-            "pixel_region_mask": torch.stack([s["pixel_region_mask"] for s in samples])}
+            "pixel_region_mask": torch.stack([s["pixel_region_mask"] for s in samples]),
+            "player_region_mask": torch.stack([s["player_region_mask"] for s in samples]),
+            "player_identity_mask": torch.stack([s["player_identity_mask"] for s in samples]),
+            "player_identity_frame": torch.stack([s["player_identity_frame"] for s in samples]),
+            "player_identity_slot": torch.stack([s["player_identity_slot"] for s in samples]),
+            "player_identity_valid": torch.stack([s["player_identity_valid"] for s in samples])}

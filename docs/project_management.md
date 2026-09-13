@@ -36,6 +36,11 @@ branch from `origin/main`, resolve conflicts, and run the tests affected by the
 change. Do not use a shared physical working directory from two terminals or
 agents at the same time.
 
+Name branches for the component and change, not for the machine that happens
+to run them. Hardware belongs in the run manifest. The existing `b200/*`
+branches are historical M3 milestones created before this convention; a branch
+with that prefix is not evidence that the commit was made on a B200 host.
+
 ## Separate development from training
 
 Development remains in the normal clone. Each long run gets a detached
@@ -57,6 +62,10 @@ python scripts/capture_run_manifest.py \
 Do not edit or pull a training worktree. Continue development in the normal
 clone. A code change used by a running experiment requires a new commit and a
 new run, or an explicitly documented compatible resume from a checkpoint.
+Use `Plot-dev` for a mutable development worktree and `Plot-runs/<run-id>` for
+detached training worktrees when naming new machine-local directories. Existing
+jobs that predate this rule remain explicit exceptions in the run registry;
+do not rename or move a directory underneath a live process.
 
 ## Run lifecycle
 
@@ -65,7 +74,7 @@ new run, or an explicitly documented compatible resume from a checkpoint.
 3. Create a detached training worktree at that commit.
 4. Generate `run_manifest.json` in the output directory.
 5. Run smoke tests, then start the formal job without changing its worktree.
-6. Add the job to `docs/runs/active.md` with owner, commit, parent checkpoint,
+6. Add the job to `docs/runs/README.md` with owner, commit, parent checkpoint,
    machine label, output path and W&B URL.
 7. On completion, record final step and metrics, upload selected weights, and
    move the entry to the completed section.
