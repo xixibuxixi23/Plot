@@ -7,6 +7,7 @@ import argparse
 import importlib
 import json
 from pathlib import Path
+import re
 import sys
 import tempfile
 
@@ -18,7 +19,11 @@ from plot.checkpoint_io import staged_torch_save
 
 
 def version_tuple(value: str) -> tuple[int, ...]:
-    return tuple(int(part) for part in value.split("+")[0].split(".")[:3])
+    release = value.split("+", 1)[0]
+    parts = re.findall(r"\d+", release)
+    if not parts:
+        raise ValueError(f"cannot parse version: {value!r}")
+    return tuple(int(part) for part in parts[:3])
 
 
 def inspect_environment(device: str, *, exercise_rasterizer: bool = True) -> dict:
