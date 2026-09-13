@@ -11,7 +11,7 @@ there.
 |---|---|---|
 | Source | `xixibuxixi23/Plot` | Code, tests, recipes, small configs and docs |
 | Dataset | `xixibuxixi/polis-v1` | Immutable raw release and reproducible indexes |
-| Learned weights | `xixibuxixi/plot-checkpoints` | Selected milestone, best and final weights |
+| Learned weights | `xixibuxixi/plot-checkpoints` (planned; create after HF login) | Selected milestone, best and final weights |
 | Run evidence | Local output plus W&B | Logs, videos, metrics and frequent resume checkpoints |
 
 Never commit credentials, raw datasets, virtual environments, W&B state or
