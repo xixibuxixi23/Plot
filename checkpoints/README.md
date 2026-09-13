@@ -39,5 +39,9 @@ names, sizes, hashes, and lineage.
   requires
   `m3/player_identity_real_finetune/step_0003300.pt`.
 - M3 step 25,000 is a parent of step 26,000, not the selected current resume
-  point. The aborted identity run logged through step 26,420 but did not save a
-  checkpoint.
+point. The aborted identity run logged through step 26,420 but did not save a
+checkpoint.
+
+The selected weights and their run metadata are mirrored in the private
+Hugging Face model repository `xixibuxixi/plot-checkpoints`. The immutable Hub
+revision and upload verification status are recorded in `SELECTED.json`.
