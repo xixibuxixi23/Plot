@@ -244,8 +244,12 @@ def main():
             "--freeze-base-for-reference requires --entity-reference-attention "
             "or --unified-player-reference"
         )
-    if args.freeze_base_for_reference and args.resume:
-        parser.error("use --warm-start for staged reference training")
+    if (
+        args.freeze_base_for_reference
+        and args.resume
+        and not args.unified_player_reference
+    ):
+        parser.error("use --warm-start for staged legacy reference training")
     if args.freeze_base_for_reference and args.freeze_base_for_appearance:
         parser.error("choose only one staged-freezing mode")
     if args.unified_player_reference and (
