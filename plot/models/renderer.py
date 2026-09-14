@@ -40,6 +40,7 @@ class RendererArgs:
     view_aware_appearance: bool = False
     detail_preserving_appearance: bool = False
     entity_reference_attention: bool = False
+    unified_player_reference: bool = False
 
 
 class ResidentConditionEncoder(MultiAgentRenderConditionEncoder):
@@ -56,6 +57,14 @@ class ResidentConditionEncoder(MultiAgentRenderConditionEncoder):
         # These legacy modules would otherwise be unused parameters under DDP.
         del self.target_mlp, self.other_mlp, self.slot_embedder, self.other_aggregator
         self.kind_embedder = nn.Embedding(4, 16)  # human, villager, zombie, skeleton
+        self.use_pooled_appearance = not cfg.unified_player_reference
+        if not self.use_pooled_appearance:
+            # In the unified path, appearance has exactly one route: native
+            # reference tokens. Keep the downstream state MLP shape checkpoint
+            # compatible, but remove the old four-view pooling parameters.
+            del self.skin_view_encoder
+            del self.appearance_direction_embedding
+            del self.skin_view_fusion
         state_dim = 3 + 1 + 4 + 4 + 64 + 128 + 16
         self.target_mlp = nn.Sequential(nn.Linear(state_dim + 3, cfg.condition_dim),
                                         nn.SiLU(), nn.Linear(cfg.condition_dim, cfg.condition_dim))
@@ -67,11 +76,15 @@ class ResidentConditionEncoder(MultiAgentRenderConditionEncoder):
         b, t, a, _ = position.shape
         if a > self.max_agents:
             raise ValueError("resident count exceeds max_agents")
-        skins = cond["player_skin"]
-        if skins.ndim != 6 or skins.shape[2] != 4:
-            raise ValueError("player_skin requires front/back/left/right [B,A,4,C,H,W]")
-        appearance = self._encode_appearance(
-            skins, cond.get("player_appearance_valid"), b, a, position.device, position.dtype)
+        if self.use_pooled_appearance:
+            skins = cond["player_skin"]
+            if skins.ndim != 6 or skins.shape[2] != 4:
+                raise ValueError("player_skin requires front/back/left/right [B,A,4,C,H,W]")
+            appearance = self._encode_appearance(
+                skins, cond.get("player_appearance_valid"), b, a,
+                position.device, position.dtype)
+        else:
+            appearance = position.new_zeros((b, a, self.skin_embedding_dim))
         hp = cond["hp"][..., None] / 20.0
         angles = cond["yaw_pitch"]
         shared = torch.cat((hp, angles.sin(), angles.cos(), cond["event_cues"],
@@ -106,6 +119,14 @@ class Renderer(nn.Module):
             raise ValueError("block_frames must be positive")
         if cfg.detail_preserving_appearance and not cfg.view_aware_appearance:
             raise ValueError("detail-preserving appearance requires view-aware appearance")
+        if cfg.unified_player_reference and (
+            cfg.view_aware_appearance
+            or cfg.detail_preserving_appearance
+            or cfg.entity_reference_attention
+        ):
+            raise ValueError(
+                "unified player reference replaces all legacy appearance/reference paths"
+            )
         if cfg.cache_frames < cfg.block_frames or cfg.context_frames < 1 + cfg.block_frames:
             raise ValueError("M3 requires room for one output block and its prefix")
         if (cfg.context_frames - 1) % cfg.block_frames:
@@ -119,10 +140,11 @@ class Renderer(nn.Module):
             if cfg.view_aware_appearance
             else None
         )
-        self.reference_encoder = PlayerReferenceEncoder(256) if cfg.entity_reference_attention else None
+        use_reference_tokens = cfg.entity_reference_attention or cfg.unified_player_reference
+        self.reference_encoder = PlayerReferenceEncoder(256) if use_reference_tokens else None
         self.reference_layout = (
             PlayerReferenceLayout(cfg.input_h, cfg.input_w)
-            if cfg.entity_reference_attention else None
+            if use_reference_tokens else None
         )
         self.core = FrameDepthStackPixelDiT(
             input_h=cfg.input_h, input_w=cfg.input_w, in_channels=cfg.in_channels,
@@ -141,6 +163,7 @@ class Renderer(nn.Module):
             ),
             detail_preserving_appearance=cfg.detail_preserving_appearance,
             entity_reference_dim=256 if cfg.entity_reference_attention else 0,
+            unified_reference_dim=256 if cfg.unified_player_reference else 0,
             gradient_checkpointing=cfg.gradient_checkpointing,
             aggregation_config={} if cfg.gpu_rasterizer else None)
 
@@ -171,12 +194,24 @@ class Renderer(nn.Module):
             reference = cond.get("player_reference")
             if reference is None:
                 reference = cond["player_skin"]
-            result["entity_reference_tokens"] = self.reference_encoder(
+            reference_tokens = self.reference_encoder(
                 reference, cond.get("player_appearance_valid")
             )
             roi, view_weights = self.reference_layout(spatial_cond, target)
-            result["entity_reference_roi"] = roi
-            result["entity_reference_view_weights"] = view_weights
+            if self.cfg.unified_player_reference:
+                result["unified_reference_tokens"] = reference_tokens
+                result["unified_reference_roi"] = roi
+                valid = cond.get("player_appearance_valid")
+                if valid is None:
+                    valid = torch.ones(
+                        reference_tokens.shape[:3], device=reference_tokens.device,
+                        dtype=torch.bool,
+                    )
+                result["unified_reference_valid"] = valid.bool()
+            else:
+                result["entity_reference_tokens"] = reference_tokens
+                result["entity_reference_roi"] = roi
+                result["entity_reference_view_weights"] = view_weights
         if self.cfg.deep_condition_reinjection:
             target_hp = self.select(cond["hp"], target) / 20.0
             target_hp_delta = self.select(cond["event_cues"], target)[..., 3] / 20.0

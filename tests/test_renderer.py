@@ -233,6 +233,84 @@ def test_entity_reference_attention_is_an_exact_trainable_warm_start():
     )
 
 
+def test_unified_player_reference_is_the_only_appearance_route_and_uses_all_views():
+    base = tiny_model()
+    unified = Renderer(replace(
+        base.cfg,
+        unified_player_reference=True,
+    )).eval()
+    incompatible = unified.load_state_dict(base.state_dict(), strict=False)
+    assert not incompatible.missing_keys or all(
+        key.startswith(("reference_encoder.", "core.unified_reference_adapter."))
+        for key in incompatible.missing_keys
+    )
+    assert all(
+        key.startswith((
+            "resident_encoder.skin_view_encoder.",
+            "resident_encoder.appearance_direction_embedding",
+            "resident_encoder.skin_view_fusion.",
+        ))
+        for key in incompatible.unexpected_keys
+    )
+    assert unified.appearance_spatial_encoder is None
+    assert unified.core.entity_reference_adapters is None
+    assert unified.core.unified_reference_adapter is not None
+    assert not hasattr(unified.resident_encoder, "skin_view_encoder")
+    assert sum(
+        type(module).__name__ == "UnifiedPlayerReferenceAdapter"
+        for module in unified.modules()
+    ) == 1
+
+    cond = conditions(9)
+    cond["player_reference"] = torch.rand(1, 2, 4, 4, 32, 16)
+    encoded = unified.encode_conditions(cond)
+    assert encoded["unified_reference_tokens"].shape == (1, 2, 4, 32, 256)
+    assert "entity_reference_view_weights" not in encoded
+    assert "appearance_spatial_condition" not in encoded
+
+    # Changing the legacy pooled skin cannot affect either state or spatial
+    # conditions when the explicit reference tensor is held fixed.
+    changed_skin = dict(cond, player_skin=torch.rand_like(cond["player_skin"]))
+    changed_encoded = unified.encode_conditions(changed_skin)
+    torch.testing.assert_close(
+        encoded["extra_condition"], changed_encoded["extra_condition"], rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        encoded["actor_spatial_condition"],
+        changed_encoded["actor_spatial_condition"],
+        rtol=0,
+        atol=0,
+    )
+
+    x, time = torch.randn(1, 9, 16, 4, 4), torch.rand(1, 9)
+    with torch.no_grad():
+        zero_outputs = []
+        for view in range(4):
+            altered = cond["player_reference"].clone()
+            altered[:, 1, view] += 2
+            zero_outputs.append(unified(x, time, dict(cond, player_reference=altered)))
+    for output in zero_outputs[1:]:
+        torch.testing.assert_close(output, zero_outputs[0], rtol=0, atol=0)
+
+    # Once the single zero-initialized output projection learns, every source
+    # view remains independently available (there is no four-select-one step).
+    with torch.no_grad():
+        unified.core.unified_reference_adapter.to_output.weight.normal_(std=.02)
+    with torch.no_grad():
+        learned_outputs = []
+        for view in range(4):
+            altered = cond["player_reference"].clone()
+            altered[:, 1, view] += 2
+            learned_outputs.append(unified(x, time, dict(cond, player_reference=altered)))
+    for output in learned_outputs[1:]:
+        assert not torch.allclose(output, learned_outputs[0])
+
+    unified.train()
+    unified(x, time, cond).square().mean().backward()
+    grad = unified.core.unified_reference_adapter.to_output.weight.grad
+    assert grad is not None and grad.abs().sum() > 0
+
+
 def test_view_aware_appearance_preserves_reference_pixels_and_selects_back_view():
     renderer = ViewAwarePlayerAppearance(height=8, width=8)
     b, t, a = 1, 1, 2

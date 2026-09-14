@@ -116,6 +116,14 @@ def main():
         help="Cross-attend native-resolution per-resident RGBA reference tokens inside coarse ROIs",
     )
     parser.add_argument(
+        "--unified-player-reference",
+        action="store_true",
+        help=(
+            "Use one input-level all-view player reference adapter; replaces pooled, "
+            "view-warped and per-block reference appearance paths"
+        ),
+    )
+    parser.add_argument(
         "--freeze-base-for-appearance",
         action="store_true",
         help="Stage-one training: update only the new dense appearance modules",
@@ -229,12 +237,25 @@ def main():
         parser.error("--detail-preserving-appearance requires --view-aware-appearance")
     if args.freeze_base_for_appearance and args.resume:
         parser.error("use --warm-start for staged appearance training")
-    if args.freeze_base_for_reference and not args.entity_reference_attention:
-        parser.error("--freeze-base-for-reference requires --entity-reference-attention")
+    if args.freeze_base_for_reference and not (
+        args.entity_reference_attention or args.unified_player_reference
+    ):
+        parser.error(
+            "--freeze-base-for-reference requires --entity-reference-attention "
+            "or --unified-player-reference"
+        )
     if args.freeze_base_for_reference and args.resume:
         parser.error("use --warm-start for staged reference training")
     if args.freeze_base_for_reference and args.freeze_base_for_appearance:
         parser.error("choose only one staged-freezing mode")
+    if args.unified_player_reference and (
+        args.entity_reference_attention
+        or args.view_aware_appearance
+        or args.detail_preserving_appearance
+    ):
+        parser.error(
+            "--unified-player-reference replaces all legacy appearance/reference flags"
+        )
     if args.appearance_unfreeze_last_spatial_blocks and not args.freeze_base_for_appearance:
         parser.error(
             "--appearance-unfreeze-last-spatial-blocks requires "
@@ -344,6 +365,7 @@ def main():
         view_aware_appearance=args.view_aware_appearance,
         detail_preserving_appearance=args.detail_preserving_appearance,
         entity_reference_attention=args.entity_reference_attention,
+        unified_player_reference=args.unified_player_reference,
     )
     with torch.cuda.device(device):
         raw_model = Renderer(cfg).to(device).train()
@@ -371,6 +393,7 @@ def main():
             trainable = name.startswith((
                 "reference_encoder.",
                 "core.entity_reference_adapters.",
+                "core.unified_reference_adapter.",
             ))
             if args.reference_unfreeze_last_spatial_blocks:
                 trainable = trainable or name.startswith("core.final_layer.")
@@ -417,7 +440,11 @@ def main():
         for name, parameter in raw_model.named_parameters():
             if not parameter.requires_grad:
                 continue
-            if name.startswith(("reference_encoder.", "core.entity_reference_adapters.")):
+            if name.startswith((
+                "reference_encoder.",
+                "core.entity_reference_adapters.",
+                "core.unified_reference_adapter.",
+            )):
                 reference_parameters.append(parameter)
             else:
                 base_parameters.append(parameter)
@@ -440,7 +467,35 @@ def main():
         start_step = int(checkpoint["step"])
     elif args.warm_start:
         checkpoint = torch.load(args.warm_start, map_location="cpu", weights_only=False)
-        incompatible = raw_model.load_state_dict(checkpoint["model"], strict=False)
+        warm_state = dict(checkpoint["model"])
+        migrated_parameters = []
+        if args.unified_player_reference:
+            # Reuse the trained first legacy reference adapter for the single
+            # input-level adapter. Shapes are identical; only routing retains
+            # the four-view axis instead of pre-averaging it.
+            old_prefix = "core.entity_reference_adapters.0."
+            new_prefix = "core.unified_reference_adapter."
+            for key, value in list(warm_state.items()):
+                if key.startswith(old_prefix):
+                    new_key = new_prefix + key[len(old_prefix):]
+                    warm_state[new_key] = value
+                    migrated_parameters.append(f"{key}->{new_key}")
+            legacy_prefixes = (
+                "resident_encoder.skin_view_encoder.",
+                "resident_encoder.appearance_direction_embedding",
+                "resident_encoder.skin_view_fusion.",
+                "appearance_spatial_encoder.",
+                "core.appearance_condition_embedder.",
+                "core.appearance_detail_embedder.",
+                "core.appearance_detail_reinjectors.",
+                "core.appearance_reinjectors.",
+                "core.entity_reference_adapters.",
+            )
+            warm_state = {
+                key: value for key, value in warm_state.items()
+                if not key.startswith(legacy_prefixes)
+            }
+        incompatible = raw_model.load_state_dict(warm_state, strict=False)
         allowed_missing = (
             "core.hud_condition_embedder.",
             "core.condition_reinjectors.",
@@ -449,6 +504,7 @@ def main():
             "core.appearance_detail_reinjectors.",
             "reference_encoder.",
             "core.entity_reference_adapters.",
+            "core.unified_reference_adapter.",
             "core.appearance_reinjectors.",
         )
         invalid_missing = [
@@ -466,6 +522,7 @@ def main():
                 "warm_start": str(args.warm_start),
                 "step": start_step,
                 "initialized_parameters": incompatible.missing_keys,
+                "migrated_parameters": migrated_parameters,
             }))
     model = (
         DistributedDataParallel(raw_model, device_ids=[local_rank], broadcast_buffers=False)

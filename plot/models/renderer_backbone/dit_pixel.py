@@ -427,6 +427,49 @@ class EntityReferenceAdapter(nn.Module):
         output *= routing.amax(-1, keepdim=True)
         return self.to_output(output).unflatten(2, (height, width))
 
+
+class UnifiedPlayerReferenceAdapter(nn.Module):
+    """Fuse all four native appearance views once, routed only by geometry.
+
+    Unlike the legacy entity-reference path, this adapter does not select or
+    average a camera-facing view before attention and is instantiated only
+    once for the whole DiT rather than once per transformer block.
+    """
+
+    def __init__(self, hidden_size, reference_dim, attention_dim=64, value_dim=256):
+        super().__init__()
+        self.x_norm = nn.LayerNorm(hidden_size)
+        self.reference_norm = nn.LayerNorm(reference_dim)
+        self.to_query = nn.Linear(hidden_size, attention_dim, bias=False)
+        self.to_key = nn.Linear(reference_dim, attention_dim, bias=False)
+        self.to_value = nn.Linear(reference_dim, value_dim)
+        self.to_output = nn.Linear(value_dim, hidden_size)
+        self.scale = attention_dim ** -.5
+
+    def forward(self, x, reference, roi, valid):
+        # x [B,T,H,W,D], reference [B,A,V,N,R], roi [B,T,A,H,W]
+        bsz, frames, height, width, _ = x.shape
+        if reference.ndim != 5 or reference.shape[0] != bsz:
+            raise ValueError("unified reference must be [B,A,V,N,D]")
+        agents, views = reference.shape[1:3]
+        if roi.shape != (bsz, frames, agents, height, width):
+            raise ValueError("unified reference ROI must be [B,T,A,H,W]")
+        if valid.shape != (bsz, agents, views):
+            raise ValueError("unified reference valid mask must be [B,A,V]")
+
+        query = self.to_query(self.x_norm(x)).flatten(2, 3)
+        normalized = self.reference_norm(reference)
+        key, value = self.to_key(normalized), self.to_value(normalized)
+        score = torch.einsum("btsh,bavnh->btsavn", query, key) * self.scale
+        routing = roi.flatten(3).permute(0, 1, 3, 2).clamp(0, 1)
+        routing = routing * valid.any(-1)[:, None, None].to(routing.dtype)
+        score = score + routing.clamp_min(1e-6).log()[..., None, None]
+        score = score.masked_fill(~valid[:, None, None, :, :, None], -1e4)
+        attention = score.flatten(3).softmax(-1).unflatten(3, score.shape[3:])
+        output = torch.einsum("btsavn,bavnd->btsd", attention, value)
+        output *= routing.amax(-1, keepdim=True)
+        return self.to_output(output).unflatten(2, (height, width))
+
 class PixelFinalLayer(nn.Module):
     """
     The final layer of pixel DiT.
@@ -714,6 +757,7 @@ class FrameDepthStackPixelDitDenoiserArgs:
     appearance_condition_dim : int = 0
     detail_preserving_appearance : bool = False
     entity_reference_dim : int = 0
+    unified_reference_dim : int = 0
     context_window_size : int = 16
     cache_window_size : int = 32
     is_causal : bool = True
@@ -764,6 +808,7 @@ class FrameDepthStackPixelDiT(nn.Module):
             appearance_condition_dim=0,
             detail_preserving_appearance=False,
             entity_reference_dim=0,
+            unified_reference_dim=0,
             context_window_size=32,
             cache_window_size=32,
             is_causal=True,
@@ -900,6 +945,11 @@ class FrameDepthStackPixelDiT(nn.Module):
             )
         else:
             self.entity_reference_adapters = None
+        self.unified_reference_adapter = (
+            UnifiedPlayerReferenceAdapter(hidden_size, unified_reference_dim)
+            if unified_reference_dim > 0
+            else None
+        )
 
         #spatial encodings
         self.pixel_spatial_emb = RotaryEmbedding(
@@ -1001,6 +1051,9 @@ class FrameDepthStackPixelDiT(nn.Module):
             for adapter in self.entity_reference_adapters:
                 nn.init.constant_(adapter.to_output.weight, 0)
                 nn.init.constant_(adapter.to_output.bias, 0)
+        if self.unified_reference_adapter is not None:
+            nn.init.constant_(self.unified_reference_adapter.to_output.weight, 0)
+            nn.init.constant_(self.unified_reference_adapter.to_output.bias, 0)
 
         # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
         w = self.x_embedder.proj.weight.data
@@ -1253,6 +1306,26 @@ class FrameDepthStackPixelDiT(nn.Module):
             entity_reference_roi = F.max_pool2d(entity_reference_roi, 3, 1, 1)
             entity_reference_roi = entity_reference_roi.squeeze(1).unflatten(
                 0, (B, T, reference.shape[1])
+            )
+        if self.unified_reference_adapter is not None:
+            reference = external_cond.get("unified_reference_tokens")
+            roi = external_cond.get("unified_reference_roi")
+            valid = external_cond.get("unified_reference_valid")
+            if reference is None or roi is None or valid is None:
+                raise ValueError("unified reference tokens, ROI and valid mask are required")
+            if roi.shape[:3] != (B, T, reference.shape[1]) or roi.shape[-2:] != (H, W):
+                raise ValueError("unified_reference_roi must be [B,T,A,H,W]")
+            unified_roi = F.max_pool2d(
+                roi.flatten(0, 2).unsqueeze(1).to(x.dtype),
+                self.patch_size,
+                self.patch_size,
+            )
+            unified_roi = F.max_pool2d(unified_roi, 3, 1, 1)
+            unified_roi = unified_roi.squeeze(1).unflatten(
+                0, (B, T, reference.shape[1])
+            )
+            x = x + self.unified_reference_adapter(
+                x, reference.to(x.dtype), unified_roi, valid.bool()
             )
         # embed noise steps
         t = rearrange(t, "b t -> (b t)")
