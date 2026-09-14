@@ -429,12 +429,11 @@ class EntityReferenceAdapter(nn.Module):
 
 
 class UnifiedPlayerReferenceAdapter(nn.Module):
-    """Fuse all native views with actor-specific geometry routing.
+    """Fuse all four native appearance views once, routed only by geometry.
 
     Unlike the legacy entity-reference path, this adapter does not select or
-    average a camera-facing view before attention. Attention is normalized
-    independently within each actor, then actor features are composed by their
-    projected ROIs. A single shared adapter can be reused in late DiT blocks.
+    average a camera-facing view before attention and is instantiated only
+    once for the whole DiT rather than once per transformer block.
     """
 
     def __init__(self, hidden_size, reference_dim, attention_dim=64, value_dim=256):
@@ -464,14 +463,11 @@ class UnifiedPlayerReferenceAdapter(nn.Module):
         score = torch.einsum("btsh,bavnh->btsavn", query, key) * self.scale
         routing = roi.flatten(3).permute(0, 1, 3, 2).clamp(0, 1)
         routing = routing * valid.any(-1)[:, None, None].to(routing.dtype)
+        score = score + routing.clamp_min(1e-6).log()[..., None, None]
         score = score.masked_fill(~valid[:, None, None, :, :, None], -1e4)
-        attention = score.flatten(4).softmax(-1).unflatten(
-            4, (views, reference.shape[3])
-        )
-        per_actor = torch.einsum("btsavn,bavnd->btsad", attention, value)
-        routing_weight = routing / routing.sum(-1, keepdim=True).clamp_min(1e-6)
-        output = torch.einsum("btsa,btsad->btsd", routing_weight, per_actor)
-        output *= (routing.sum(-1, keepdim=True) > 0).to(output.dtype)
+        attention = score.flatten(3).softmax(-1).unflatten(3, score.shape[3:])
+        output = torch.einsum("btsavn,bavnd->btsd", attention, value)
+        output *= routing.amax(-1, keepdim=True)
         return self.to_output(output).unflatten(2, (height, width))
 
 class PixelFinalLayer(nn.Module):
@@ -762,7 +758,6 @@ class FrameDepthStackPixelDitDenoiserArgs:
     detail_preserving_appearance : bool = False
     entity_reference_dim : int = 0
     unified_reference_dim : int = 0
-    unified_reference_blocks : int = 0
     context_window_size : int = 16
     cache_window_size : int = 32
     is_causal : bool = True
@@ -814,7 +809,6 @@ class FrameDepthStackPixelDiT(nn.Module):
             detail_preserving_appearance=False,
             entity_reference_dim=0,
             unified_reference_dim=0,
-            unified_reference_blocks=0,
             context_window_size=32,
             cache_window_size=32,
             is_causal=True,
@@ -866,11 +860,6 @@ class FrameDepthStackPixelDiT(nn.Module):
         self.qk_rms_norm = qk_rms_norm
         self.gradient_checkpointing = gradient_checkpointing
         self.deep_condition_reinjection = bool(deep_condition_reinjection)
-        self.unified_reference_blocks = int(unified_reference_blocks)
-        if unified_reference_dim > 0 and not 1 <= self.unified_reference_blocks <= depth:
-            raise ValueError("unified_reference_blocks must be between 1 and DiT depth")
-        if unified_reference_dim <= 0 and self.unified_reference_blocks:
-            raise ValueError("unified_reference_blocks requires unified reference tokens")
 
         # Calculate depth-compressed raster dimensions
         raster_num_layers = self.voxel_dim * 4
@@ -1318,9 +1307,6 @@ class FrameDepthStackPixelDiT(nn.Module):
             entity_reference_roi = entity_reference_roi.squeeze(1).unflatten(
                 0, (B, T, reference.shape[1])
             )
-        unified_reference = None
-        unified_reference_roi = None
-        unified_reference_valid = None
         if self.unified_reference_adapter is not None:
             reference = external_cond.get("unified_reference_tokens")
             roi = external_cond.get("unified_reference_roi")
@@ -1329,17 +1315,18 @@ class FrameDepthStackPixelDiT(nn.Module):
                 raise ValueError("unified reference tokens, ROI and valid mask are required")
             if roi.shape[:3] != (B, T, reference.shape[1]) or roi.shape[-2:] != (H, W):
                 raise ValueError("unified_reference_roi must be [B,T,A,H,W]")
-            unified_reference_roi = F.max_pool2d(
+            unified_roi = F.max_pool2d(
                 roi.flatten(0, 2).unsqueeze(1).to(x.dtype),
                 self.patch_size,
                 self.patch_size,
             )
-            unified_reference_roi = F.max_pool2d(unified_reference_roi, 3, 1, 1)
-            unified_reference_roi = unified_reference_roi.squeeze(1).unflatten(
+            unified_roi = F.max_pool2d(unified_roi, 3, 1, 1)
+            unified_roi = unified_roi.squeeze(1).unflatten(
                 0, (B, T, reference.shape[1])
             )
-            unified_reference = reference.to(x.dtype)
-            unified_reference_valid = valid.bool()
+            x = x + self.unified_reference_adapter(
+                x, reference.to(x.dtype), unified_roi, valid.bool()
+            )
         # embed noise steps
         t = rearrange(t, "b t -> (b t)")
         c = self.t_embedder(t)  # (N, D)
@@ -1402,28 +1389,6 @@ class FrameDepthStackPixelDiT(nn.Module):
         global_start_idx_t = torch.tensor(global_start_idx, device=x.device)
         kv_candidates = []
         for i, block in enumerate(self.blocks):
-            if (
-                self.unified_reference_adapter is not None
-                and i >= self.depth - self.unified_reference_blocks
-            ):
-                if self.gradient_checkpointing and self.training:
-                    reference_delta = checkpoint(
-                        lambda x_, reference_, roi_: self.unified_reference_adapter(
-                            x_, reference_, roi_, unified_reference_valid
-                        ),
-                        x,
-                        unified_reference,
-                        unified_reference_roi,
-                        use_reentrant=False,
-                    )
-                else:
-                    reference_delta = self.unified_reference_adapter(
-                        x,
-                        unified_reference,
-                        unified_reference_roi,
-                        unified_reference_valid,
-                    )
-                x = x + reference_delta
             if self.condition_reinjectors is not None:
                 x = x + self.condition_reinjectors[i](condition_tokens)
             if self.appearance_reinjectors is not None:

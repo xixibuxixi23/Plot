@@ -23,9 +23,6 @@ if [[ -n "$resume" ]]; then
   checkpoint_path=$resume
   checkpoint_args=(--resume "$resume")
 fi
-if [[ ${RESET_UNIFIED_REFERENCE_ADAPTER:-0} == 1 ]]; then
-  checkpoint_args+=(--reset-unified-reference-adapter)
-fi
 
 for required_path in "$python_bin" "$dataset_root" "$checkpoint_path" "$identity_checkpoint"; do
   if [[ ! -e "$required_path" ]]; then
@@ -58,13 +55,11 @@ CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7} \
   --pixel-vae checkpoints/pixel_vae/model.safetensors \
   "${checkpoint_args[@]}" \
   --unified-player-reference \
-  --unified-reference-blocks "${UNIFIED_REFERENCE_BLOCKS:-4}" \
   --freeze-base-for-reference \
   --reference-unfreeze-last-spatial-blocks "${REFERENCE_UNFREEZE_LAST_SPATIAL_BLOCKS:-2}" \
   --unfrozen-base-lr-scale "${UNFROZEN_BASE_LR_SCALE:-0.1}" \
   --player-identity-checkpoint "$identity_checkpoint" \
   --player-identity-loss-weight "${PLAYER_IDENTITY_LOSS_WEIGHT:-0.1}" \
-  --player-identity-min-noise "${PLAYER_IDENTITY_MIN_NOISE:-0.0}" \
   --player-identity-margin "${PLAYER_IDENTITY_MARGIN:-0.2}" \
   --player-identity-negative-weight "${PLAYER_IDENTITY_NEGATIVE_WEIGHT:-0.5}" \
   --output-dir "$output_dir" \
@@ -86,7 +81,6 @@ CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7} \
   --latent-entity-region-upweight 0 \
   --latent-player-region-upweight "${LATENT_PLAYER_REGION_UPWEIGHT:-4}" \
   --player-mask-probability "${PLAYER_MASK_PROBABILITY:-0.5}" \
-  --player-prefix-mask-probability "${PLAYER_PREFIX_MASK_PROBABILITY:-0.0}" \
   --pixel-loss-frames 1 \
   --entity-pixel-l1-weight 0 \
   --entity-pixel-edge-weight 0 \
