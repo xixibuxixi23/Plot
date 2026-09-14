@@ -28,9 +28,16 @@ def _weights(path):
 
 
 @torch.no_grad()
-def _predict(model, codec, sample, *, seed, precision):
+def _predict(model, codec, sample, *, seed, precision, mask_prefix_players=False):
     device = next(model.parameters()).device
     rgb = sample["rgb"][:, :65].to(device)
+    if mask_prefix_players:
+        # Diagnostic only: remove the redundant identity evidence from the
+        # rollout prefix while keeping geometry/reference conditions intact.
+        # Mid-gray avoids introducing an extreme all-black latent patch.
+        prefix_mask = sample["player_region_mask"][:, :1].to(device).bool()
+        rgb = rgb.clone()
+        rgb[:, :1] = torch.where(prefix_mask, rgb.new_tensor(0.5), rgb[:, :1])
     conditions = {
         key: value.to(device) for key, value in sample["conditions"].items()
     }
@@ -125,6 +132,14 @@ def main():
     )
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument(
+        "--mask-prefix-players",
+        action="store_true",
+        help=(
+            "diagnostic: replace visible player pixels in the first rollout "
+            "frame so reference dependence is not hidden by video history"
+        ),
+    )
+    parser.add_argument(
         "--identity-checkpoint",
         help="frozen player identity encoder (defaults to the training config)",
     )
@@ -155,6 +170,7 @@ def main():
     report = {
         "checkpoint": str(checkpoint_path),
         "identity_checkpoint": str(identity_path) if identity_path else None,
+        "mask_prefix_players": args.mask_prefix_players,
         "probes": {},
     }
 
@@ -181,6 +197,7 @@ def main():
                 sample,
                 seed=probe_number,
                 precision=config["training"].get("precision", "bf16"),
+                mask_prefix_players=args.mask_prefix_players,
             )
             variants[name] = prediction.float()
             write_comparison_video(
