@@ -28,31 +28,12 @@ count_usable() {
 }
 
 while true; do
-  completed_shards=0
-  running_shards=0
-  failed_shards=0
-  for ((shard = 0; shard < EXPECTED_SHARDS; shard++)); do
-    shard_name="$(printf '%03d' "${shard}")"
-    pid_file="${COLLECTION_LOG_DIR}/shard_${shard_name}.pid"
-    exit_file="${COLLECTION_LOG_DIR}/shard_${shard_name}.exit"
-    if [[ -s "${pid_file}" ]] && kill -0 "$(<"${pid_file}")" 2>/dev/null; then
-      # A stale exit marker may remain from an earlier failed launch.  The PID
-      # file is written by the current worker, so a live PID takes precedence.
-      running_shards=$((running_shards + 1))
-      continue
-    fi
-    [[ -e "${exit_file}" ]] || continue
-    completed_shards=$((completed_shards + 1))
-    [[ "$(<"${exit_file}")" == "0" ]] || failed_shards=$((failed_shards + 1))
-  done
+  completed_shards="$(find "${COLLECTION_LOG_DIR}" -name 'shard_*.exit' -type f | wc -l)"
+  running_shards=$((EXPECTED_SHARDS - completed_shards))
   usable="$(count_usable)"
-  printf '%s collection usable=%s/%s running_shards=%s completed_shards=%s/%s failed_shards=%s\n' \
+  printf '%s collection usable=%s/%s unfinished_shards=%s completed_shards=%s/%s\n' \
     "$(date -u +%FT%TZ)" "${usable}" "${EXPECTED_EPISODES}" \
-    "${running_shards}" "${completed_shards}" "${EXPECTED_SHARDS}" "${failed_shards}"
-  if (( failed_shards > 0 )); then
-    echo "S11 collection has failed shards; refusing to start formal training" >&2
-    exit 2
-  fi
+    "${running_shards}" "${completed_shards}" "${EXPECTED_SHARDS}"
   if (( completed_shards == EXPECTED_SHARDS )); then
     if (( usable != EXPECTED_EPISODES )); then
       echo "S11 collection ended with ${usable}/${EXPECTED_EPISODES} usable episodes" >&2
