@@ -6,7 +6,6 @@ import torch
 from plot.data.fill_dataset import BlockVocabulary
 from plot.data.renderer_dataset import incoming_actions, merge_observation_crops, raster_camera
 from plot.models.renderer import Renderer, RendererArgs
-from plot.models.renderer_backbone.dit_pixel import UnifiedPlayerReferenceAdapter
 from plot.models.renderer_backbone.player_spatial_condition import ViewAwarePlayerAppearance
 from plot.pipelines.renderer_pipeline import RendererMemoryBlock
 from plot.training.renderer_trainer import (
@@ -310,28 +309,6 @@ def test_unified_player_reference_is_the_only_appearance_route_and_uses_all_view
     unified(x, time, cond).square().mean().backward()
     grad = unified.core.unified_reference_adapter.to_output.weight.grad
     assert grad is not None and grad.abs().sum() > 0
-
-
-def test_unified_player_reference_keeps_actor_tokens_separate_until_roi_composition():
-    torch.manual_seed(7)
-    adapter = UnifiedPlayerReferenceAdapter(
-        hidden_size=8, reference_dim=6, attention_dim=4, value_dim=5
-    ).eval()
-    x = torch.randn(1, 1, 1, 2, 8)
-    reference = torch.randn(1, 2, 4, 3, 6)
-    valid = torch.ones(1, 2, 4, dtype=torch.bool)
-    roi = torch.zeros(1, 1, 2, 1, 2)
-    roi[:, :, 0, :, 0] = 1
-    roi[:, :, 1, :, 1] = 1
-
-    with torch.no_grad():
-        expected = adapter(x, reference, roi, valid)
-        changed_reference = reference.clone()
-        changed_reference[:, 1] = torch.randn_like(changed_reference[:, 1]) * 3
-        actual = adapter(x, changed_reference, roi, valid)
-
-    torch.testing.assert_close(actual[..., 0, :], expected[..., 0, :], rtol=0, atol=0)
-    assert not torch.allclose(actual[..., 1, :], expected[..., 1, :])
 
 
 def test_view_aware_appearance_preserves_reference_pixels_and_selects_back_view():

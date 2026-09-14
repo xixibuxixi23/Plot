@@ -432,10 +432,8 @@ class UnifiedPlayerReferenceAdapter(nn.Module):
     """Fuse all four native appearance views once, routed only by geometry.
 
     Unlike the legacy entity-reference path, this adapter does not select or
-    average a camera-facing view before attention. Attention is normalized
-    independently inside each resident, so overlapping ROIs cannot make one
-    resident steal another resident's reference tokens. The resulting resident
-    features are composed only with the projected ROIs.
+    average a camera-facing view before attention and is instantiated only
+    once for the whole DiT rather than once per transformer block.
     """
 
     def __init__(self, hidden_size, reference_dim, attention_dim=64, value_dim=256):
@@ -465,12 +463,11 @@ class UnifiedPlayerReferenceAdapter(nn.Module):
         score = torch.einsum("btsh,bavnh->btsavn", query, key) * self.scale
         routing = roi.flatten(3).permute(0, 1, 3, 2).clamp(0, 1)
         routing = routing * valid.any(-1)[:, None, None].to(routing.dtype)
+        score = score + routing.clamp_min(1e-6).log()[..., None, None]
         score = score.masked_fill(~valid[:, None, None, :, :, None], -1e4)
-        attention = score.flatten(4).softmax(-1).unflatten(4, (views, reference.shape[3]))
-        per_agent = torch.einsum("btsavn,bavnd->btsad", attention, value)
-        routing_weight = routing / routing.sum(-1, keepdim=True).clamp_min(1e-6)
-        output = torch.einsum("btsa,btsad->btsd", routing_weight, per_agent)
-        output *= (routing.sum(-1, keepdim=True) > 0).to(output.dtype)
+        attention = score.flatten(3).softmax(-1).unflatten(3, score.shape[3:])
+        output = torch.einsum("btsavn,bavnd->btsd", attention, value)
+        output *= routing.amax(-1, keepdim=True)
         return self.to_output(output).unflatten(2, (height, width))
 
 class PixelFinalLayer(nn.Module):
@@ -1310,9 +1307,6 @@ class FrameDepthStackPixelDiT(nn.Module):
             entity_reference_roi = entity_reference_roi.squeeze(1).unflatten(
                 0, (B, T, reference.shape[1])
             )
-        unified_reference = None
-        unified_reference_roi = None
-        unified_reference_valid = None
         if self.unified_reference_adapter is not None:
             reference = external_cond.get("unified_reference_tokens")
             roi = external_cond.get("unified_reference_roi")
@@ -1321,17 +1315,18 @@ class FrameDepthStackPixelDiT(nn.Module):
                 raise ValueError("unified reference tokens, ROI and valid mask are required")
             if roi.shape[:3] != (B, T, reference.shape[1]) or roi.shape[-2:] != (H, W):
                 raise ValueError("unified_reference_roi must be [B,T,A,H,W]")
-            unified_reference_roi = F.max_pool2d(
+            unified_roi = F.max_pool2d(
                 roi.flatten(0, 2).unsqueeze(1).to(x.dtype),
                 self.patch_size,
                 self.patch_size,
             )
-            unified_reference_roi = F.max_pool2d(unified_reference_roi, 3, 1, 1)
-            unified_reference_roi = unified_reference_roi.squeeze(1).unflatten(
+            unified_roi = F.max_pool2d(unified_roi, 3, 1, 1)
+            unified_roi = unified_roi.squeeze(1).unflatten(
                 0, (B, T, reference.shape[1])
             )
-            unified_reference = reference.to(x.dtype)
-            unified_reference_valid = valid.bool()
+            x = x + self.unified_reference_adapter(
+                x, reference.to(x.dtype), unified_roi, valid.bool()
+            )
         # embed noise steps
         t = rearrange(t, "b t -> (b t)")
         c = self.t_embedder(t)  # (N, D)
@@ -1474,15 +1469,6 @@ class FrameDepthStackPixelDiT(nn.Module):
             if block_callback is not None:
                 block_callback(i, x)
 
-        # A single late injection keeps identity detail close to the pixel
-        # prediction instead of asking the full DiT stack to preserve it.
-        if self.unified_reference_adapter is not None:
-            x = x + self.unified_reference_adapter(
-                x,
-                unified_reference,
-                unified_reference_roi,
-                unified_reference_valid,
-            )
         features = x
         x = self.final_layer(x, c)  # (N, T, H, W, patch_size ** 2 * out_channels)
         # unpatchify
