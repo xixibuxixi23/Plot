@@ -6,6 +6,7 @@ cd "$repo_root"
 
 dataset_root=${PLOT_DATASET_ROOT:-/public/0_DATA/2_Avatar/zhizhou_share/rcz/textagent/data/releases/polis_v1_20260909_360p}
 warm_start=${WARM_START:-outputs/m3_h200_2node_identity_canary_b2_from26000_to26500_20260914/step_0026500.pt}
+resume=${RESUME:-}
 identity_checkpoint=${IDENTITY_CHECKPOINT:-checkpoints/m3/player_identity_real_finetune/step_0003300.pt}
 output_dir=${OUTPUT_DIR:-outputs/m3_h200_2node_unified_reference_from26500_to36500_20260914}
 checkpoint_staging_dir=${PLOT_CHECKPOINT_STAGING_DIR:-.checkpoint_staging}
@@ -16,7 +17,14 @@ master_addr=${MASTER_ADDR:-127.0.0.1}
 master_port=${MASTER_PORT:-29500}
 python_bin=${PYTHON_BIN:-$repo_root/.venv/bin/python}
 
-for required_path in "$python_bin" "$dataset_root" "$warm_start" "$identity_checkpoint"; do
+checkpoint_path=$warm_start
+checkpoint_args=(--warm-start "$warm_start")
+if [[ -n "$resume" ]]; then
+  checkpoint_path=$resume
+  checkpoint_args=(--resume "$resume")
+fi
+
+for required_path in "$python_bin" "$dataset_root" "$checkpoint_path" "$identity_checkpoint"; do
   if [[ ! -e "$required_path" ]]; then
     echo "Required path does not exist: $required_path" >&2
     exit 1
@@ -45,7 +53,7 @@ CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7} \
   --val-window-index derived/m3/validated/val_id_c65.pt \
   --vocabulary derived/common/block_vocabulary.json \
   --pixel-vae checkpoints/pixel_vae/model.safetensors \
-  --warm-start "$warm_start" \
+  "${checkpoint_args[@]}" \
   --unified-player-reference \
   --freeze-base-for-reference \
   --reference-unfreeze-last-spatial-blocks "${REFERENCE_UNFREEZE_LAST_SPATIAL_BLOCKS:-2}" \
