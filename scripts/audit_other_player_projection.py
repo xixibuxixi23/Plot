@@ -277,9 +277,18 @@ def _draw_example(candidate: dict, output: Path) -> dict[str, float]:
     x0, y0, x1, y1 = np.rint(box).astype(int)
     cv2.rectangle(overlay_bgr, (x0, y0), (x1, y1), (255, 128, 0), 2)
     real_bgr = cv2.cvtColor((rgb * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
-    panel = np.concatenate((real_bgr, overlay_bgr), axis=1)
+
+    # A neutral canvas makes the third panel an unambiguous view of the
+    # projected reference alone, without pixels from the recorded observation.
+    projection_only = np.full_like(rgb, 0.18)
+    projection_only = projection_only * (1 - alpha) + unpremultiplied * alpha
+    projection_only_bgr = cv2.cvtColor(
+        np.clip(projection_only * 255, 0, 255).astype(np.uint8), cv2.COLOR_RGB2BGR
+    )
+    panel = np.concatenate((real_bgr, overlay_bgr, projection_only_bgr), axis=1)
     label = (
-        f"left=actual  right=projected overlay | target={target} source={source} "
+        f"left=actual  center=projected overlay  right=projection only | "
+        f"target={target} source={source} "
         f"frame={frame} view={VIEW_NAMES[int(weights.argmax())]}"
     )
     cv2.putText(panel, label, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 2)
