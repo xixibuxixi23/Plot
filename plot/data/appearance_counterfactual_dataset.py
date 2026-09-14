@@ -36,7 +36,8 @@ class AppearanceCounterfactualRendererDataset(Dataset):
             variant = manifest.get("appearance_variant_index")
             if group_id is None or variant is None:
                 continue
-            grouped[(str(group_id), int(start), int(target))].append(
+            relative_start = int(start) - int(manifest.get("model_start_observation", 0))
+            grouped[(str(group_id), relative_start, int(target))].append(
                 (int(variant), int(episode_id), int(start), int(target))
             )
         self.index = []

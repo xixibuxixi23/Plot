@@ -76,6 +76,23 @@ def build_flow_region_weight(
     return base_weight + player_upweight * gate[:, None, None, None, None] * latent_mask
 
 
+def use_counterfactual_step(step: int, probability: float, seed: int) -> bool:
+    """Choose mixed S11 steps reproducibly, including after checkpoint resume."""
+    if probability <= 0:
+        return False
+    if probability >= 1:
+        return True
+    # SplitMix64 gives every absolute training step a stable pseudo-random draw.
+    # Depending on the absolute step (rather than iterator RNG state) makes a
+    # resumed run use exactly the same data-source schedule.
+    mask = (1 << 64) - 1
+    value = (int(step) + int(seed) * 0x9E3779B97F4A7C15) & mask
+    value = ((value ^ (value >> 30)) * 0xBF58476D1CE4E5B9) & mask
+    value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & mask
+    value ^= value >> 31
+    return value < int(float(probability) * (1 << 64))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset-root", required=True)
@@ -98,6 +115,26 @@ def main():
         help="group complete S11 skin variants by identical trajectory/start/target",
     )
     parser.add_argument("--counterfactual-variants", type=int, default=4)
+    parser.add_argument(
+        "--counterfactual-dataset-root",
+        help=(
+            "Optional S11 root mixed with the ordinary --dataset-root while "
+            "preserving complete appearance groups"
+        ),
+    )
+    parser.add_argument("--counterfactual-window-index")
+    parser.add_argument(
+        "--counterfactual-step-probability",
+        type=float,
+        default=0.0,
+        help="Fraction of optimizer steps drawn from grouped S11 data",
+    )
+    parser.add_argument(
+        "--counterfactual-player-mask-probability",
+        type=float,
+        default=1.0,
+        help="Player-region flow-focus probability on grouped S11 steps",
+    )
     parser.add_argument("--val-window-index")
     parser.add_argument("--health-focus-index")
     parser.add_argument(
@@ -223,6 +260,12 @@ def main():
         "--mask-prefix-player-probability", type=float, default=0.0,
         help="replace visible other-player pixels in the observed prefix with mid-gray",
     )
+    parser.add_argument(
+        "--counterfactual-mask-prefix-player-probability",
+        type=float,
+        default=1.0,
+        help="prefix-player masking probability on grouped S11 steps",
+    )
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument(
         "--unfrozen-base-lr-scale",
@@ -294,10 +337,30 @@ def main():
         parser.error("--player-mask-probability must be between 0 and 1")
     if not 0 <= args.mask_prefix_player_probability <= 1:
         parser.error("--mask-prefix-player-probability must be between 0 and 1")
+    if not 0 <= args.counterfactual_player_mask_probability <= 1:
+        parser.error("--counterfactual-player-mask-probability must be between 0 and 1")
+    if not 0 <= args.counterfactual_mask_prefix_player_probability <= 1:
+        parser.error(
+            "--counterfactual-mask-prefix-player-probability must be between 0 and 1"
+        )
     if args.appearance_counterfactual and args.target_views_per_window != 1:
         parser.error("--appearance-counterfactual requires --target-views-per-window 1")
-    if args.counterfactual_player_difference_weight > 0 and not args.appearance_counterfactual:
-        parser.error("counterfactual difference loss requires --appearance-counterfactual")
+    if not 0 <= args.counterfactual_step_probability <= 1:
+        parser.error("--counterfactual-step-probability must be between 0 and 1")
+    if bool(args.counterfactual_dataset_root) != bool(args.counterfactual_step_probability):
+        parser.error(
+            "--counterfactual-dataset-root and a positive "
+            "--counterfactual-step-probability must be used together"
+        )
+    if args.appearance_counterfactual and args.counterfactual_dataset_root:
+        parser.error(
+            "use either dedicated --appearance-counterfactual training or mixed "
+            "--counterfactual-dataset-root training"
+        )
+    if args.counterfactual_player_difference_weight > 0 and not (
+        args.appearance_counterfactual or args.counterfactual_dataset_root
+    ):
+        parser.error("counterfactual difference loss requires grouped S11 data")
     if args.unfrozen_base_lr_scale <= 0:
         parser.error("--unfrozen-base-lr-scale must be positive")
     if args.player_identity_loss_weight > 0 and not args.player_identity_checkpoint:
@@ -390,6 +453,41 @@ def main():
         num_workers=args.workers,
         collate_fn=collate_renderer,
     )
+    counterfactual_dataset = None
+    counterfactual_sampler = None
+    counterfactual_loader = None
+    if args.counterfactual_dataset_root:
+        counterfactual_dataset = AppearanceCounterfactualRendererDataset(
+            args.counterfactual_dataset_root,
+            args.vocabulary,
+            split="train",
+            context_frames=args.context_frames,
+            window_index=args.counterfactual_window_index,
+            targets_per_window=1,
+            variants_per_group=args.counterfactual_variants,
+            entity_region_upweight=args.latent_entity_region_upweight,
+        )
+        if counterfactual_dataset.item_vocabulary != dataset.item_vocabulary:
+            raise ValueError("ordinary and S11 item vocabularies differ")
+        counterfactual_sampler = (
+            DistributedSampler(
+                counterfactual_dataset,
+                num_replicas=world,
+                rank=rank,
+                shuffle=True,
+                seed=args.seed + 1,
+            )
+            if world > 1
+            else None
+        )
+        counterfactual_loader = DataLoader(
+            counterfactual_dataset,
+            batch_size=args.batch_size,
+            shuffle=counterfactual_sampler is None,
+            sampler=counterfactual_sampler,
+            num_workers=args.workers,
+            collate_fn=collate_renderer,
+        )
     cfg = RendererArgs(
         dataset.vocabulary.size,
         max(dataset.item_vocabulary.values()) + 1,
@@ -643,7 +741,11 @@ def main():
             flush=True,
         )
     iterator = iter(loader)
+    counterfactual_iterator = (
+        iter(counterfactual_loader) if counterfactual_loader is not None else None
+    )
     epoch = 0
+    counterfactual_epoch = 0
     loss_kwargs = {
         "frames_per_sample": args.pixel_loss_frames,
         "entity_pixel_l1_weight": args.entity_pixel_l1_weight,
@@ -664,21 +766,43 @@ def main():
     for step in range(start_step + 1, args.steps + 1):
         optimizer.zero_grad(set_to_none=True)
         accumulated = {name: 0.0 for name in LOSS_NAMES}
+        counterfactual_step = bool(
+            counterfactual_loader is not None
+            and use_counterfactual_step(
+                step, args.counterfactual_step_probability, args.seed
+            )
+        )
+        active_dataset = counterfactual_dataset if counterfactual_step else dataset
         for micro in range(args.gradient_accumulation):
-            try:
-                batch = next(iterator)
-            except StopIteration:
-                epoch += 1
-                if sampler is not None:
-                    sampler.set_epoch(epoch)
-                iterator = iter(loader)
-                batch = next(iterator)
+            if counterfactual_step:
+                try:
+                    batch = next(counterfactual_iterator)
+                except StopIteration:
+                    counterfactual_epoch += 1
+                    if counterfactual_sampler is not None:
+                        counterfactual_sampler.set_epoch(counterfactual_epoch)
+                    counterfactual_iterator = iter(counterfactual_loader)
+                    batch = next(counterfactual_iterator)
+            else:
+                try:
+                    batch = next(iterator)
+                except StopIteration:
+                    epoch += 1
+                    if sampler is not None:
+                        sampler.set_epoch(epoch)
+                    iterator = iter(loader)
+                    batch = next(iterator)
             rgb = batch["rgb"].to(device)
-            if args.mask_prefix_player_probability > 0:
-                group_size = getattr(dataset, "group_size", 1)
+            prefix_mask_probability = (
+                args.counterfactual_mask_prefix_player_probability
+                if counterfactual_step or args.appearance_counterfactual
+                else args.mask_prefix_player_probability
+            )
+            if prefix_mask_probability > 0:
+                group_size = getattr(active_dataset, "group_size", 1)
                 group_count = len(rgb) // group_size
                 gate = (torch.rand(group_count, device=device)
-                        < args.mask_prefix_player_probability)
+                        < prefix_mask_probability)
                 gate = gate.repeat_interleave(group_size)
                 prefix_player = batch["player_region_mask"][:, :1].to(device).bool()
                 rgb = rgb.clone()
@@ -711,14 +835,28 @@ def main():
                             batch["region_weight"].to(device),
                             batch["player_region_mask"].to(device),
                             player_upweight=args.latent_player_region_upweight,
-                            probability=args.player_mask_probability,
+                            probability=(
+                                args.counterfactual_player_mask_probability
+                                if counterfactual_step or args.appearance_counterfactual
+                                else args.player_mask_probability
+                            ),
                             randomize=True,
                         ),
                         player_identity_mask=batch["player_identity_mask"].to(device),
                         player_identity_frame=batch["player_identity_frame"].to(device),
                         player_identity_slot=batch["player_identity_slot"].to(device),
                         player_identity_valid=batch["player_identity_valid"].to(device),
-                        **loss_kwargs,
+                        **{
+                            **loss_kwargs,
+                            "counterfactual_group_size": getattr(
+                                active_dataset, "group_size", 1
+                            ),
+                            "counterfactual_player_difference_weight": (
+                                args.counterfactual_player_difference_weight
+                                if counterfactual_step or args.appearance_counterfactual
+                                else 0.0
+                            ),
+                        },
                     )
                     loss = losses["total_loss"] / args.gradient_accumulation
                 if not torch.isfinite(loss):
@@ -756,13 +894,15 @@ def main():
                 "train/cuda_memory_allocated_max_gib": float(memory_by_rank[:, 0].max()),
                 "train/cuda_peak_allocated_max_gib": float(memory_by_rank[:, 1].max()),
                 "train/cuda_peak_reserved_max_gib": float(memory_by_rank[:, 2].max()),
+                "train/counterfactual_step": float(counterfactual_step),
             }
             memory_text = " ".join(
                 f"rank{index}_peak_reserved_gib={float(values[2]):.2f}"
                 for index, values in enumerate(memory_by_rank)
             )
             print(
-                f"step={step} loss={train_log['train/total_loss']:.6f} "
+                f"step={step} source={'s11' if counterfactual_step else 'ordinary'} "
+                f"loss={train_log['train/total_loss']:.6f} "
                 f"flow={train_log['train/flow_loss']:.6f} "
                 f"entity_l1={train_log['train/entity_pixel_l1']:.6f} "
                 f"health_l1={train_log['train/health_pixel_l1']:.6f} "

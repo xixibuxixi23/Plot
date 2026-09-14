@@ -22,6 +22,7 @@ from plot.training.renderer_trainer import (
     select_renderer_pixel_frames,
     slice_conditions,
 )
+from train_scripts.train_renderer import use_counterfactual_step
 
 
 torch.set_num_threads(2)
@@ -575,6 +576,15 @@ def test_counterfactual_groups_use_identical_pure_noise_and_supervise_target_dif
         ignored_reference, clean, mask, 2
     ) > 0
     assert renderer_counterfactual_player_loss(clean, clean, mask, 2) == 0
+
+
+def test_mixed_counterfactual_schedule_is_stable_and_close_to_requested_ratio():
+    first = [use_counterfactual_step(step, 0.2, 17) for step in range(1, 10_001)]
+    resumed = [use_counterfactual_step(step, 0.2, 17) for step in range(5_001, 10_001)]
+    assert first[5_000:] == resumed
+    assert 0.18 < sum(first) / len(first) < 0.22
+    assert not any(use_counterfactual_step(step, 0.0, 17) for step in range(10))
+    assert all(use_counterfactual_step(step, 1.0, 17) for step in range(10))
 
 
 def test_counterfactual_dataset_canonicalizes_voxels_but_keeps_references():

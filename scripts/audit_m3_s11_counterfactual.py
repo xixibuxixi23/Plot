@@ -12,8 +12,10 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import cv2
+import numpy as np
 import torch
 
+from plot.data.fill_dataset import TextAgentFillDataset
 from plot.data.renderer_dataset import TextAgentRendererDataset, collate_renderer
 from plot.models.renderer import Renderer, RendererArgs
 from plot.models.renderer_codec import RendererCodec
@@ -57,6 +59,11 @@ def main() -> None:
     parser.add_argument("--dataset-root", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--start", type=int, default=83)
+    parser.add_argument(
+        "--start-offset",
+        type=int,
+        help="window start relative to each episode's model_start_observation",
+    )
     parser.add_argument("--target", type=int, default=0)
     parser.add_argument("--group-id", help="appearance_group_id in a multi-trajectory root")
     parser.add_argument("--denoising-steps", type=int, default=8)
@@ -87,13 +94,29 @@ def main() -> None:
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
 
-    raws = [TextAgentRendererDataset.read_window(
-        episode,
-        config["training"]["vocabulary"],
-        start=args.start,
-        target=args.target,
-        context_frames=65,
-    ) for episode in episodes]
+    starts = []
+    for episode in episodes:
+        if args.start_offset is None:
+            starts.append(args.start)
+            continue
+        manifest = json.loads((episode / "manifest.json").read_text())
+        with np.load(
+            episode / manifest.get("training_data_file", "data.npz"),
+            allow_pickle=False,
+        ) as data:
+            starts.append(
+                TextAgentFillDataset._model_start(data, manifest) + args.start_offset
+            )
+    raws = [
+        TextAgentRendererDataset.read_window(
+            episode,
+            config["training"]["vocabulary"],
+            start=start,
+            target=args.target,
+            context_frames=65,
+        )
+        for episode, start in zip(episodes, starts)
+    ]
     # Match the training adapter: fresh Minetest processes may assign shifted
     # numeric IDs to the same named nodes, which is not a causal appearance cue.
     for raw in raws[1:]:
@@ -157,7 +180,9 @@ def main() -> None:
     report = {
         "schema_version": "plot-m3-s11-reference-causal-audit-v1",
         "checkpoint": str(checkpoint_path),
-        "start": args.start,
+        "start": args.start if args.start_offset is None else None,
+        "start_offset": args.start_offset,
+        "episode_starts": starts,
         "target": args.target,
         "appearance_group_id": args.group_id,
         "denoising_steps": args.denoising_steps,
