@@ -139,3 +139,23 @@ batch 1 下约为 17% 实际 S11 clips，而不是把 20% step 错当成 20% 样
 recipe 为：
 
 `train_scripts/recipes/m3/train_m3_mixed_s11_referenceonly_8gpu.sh`
+
+## 五机采集与正式训练状态
+
+S11 正式训练集已按 **5 台物理机器 × 每台 32 个 worker = 160 个采集进程**
+完成。采集显式禁用 CUDA，并使用软件渲染，因此不占用训练 GPU。160 个 shard
+全部正常结束，最终得到 100 个完整 group、400 个 usable episode 和 6,400 个
+65-frame 训练窗口；没有 incomplete group。完整索引为：
+
+`derived/s11/mixed_train_v2_complete_g100_c65.pt`
+
+自动门禁确认 `usable=400/400`、`completed_shards=160/160` 后，已在 port 20470
+节点的 8 张 NVIDIA H200 上从 `step_0027000.pt` 启动 10,000-step 正式续训。
+配置为每卡 batch 1、global/effective optimizer batch 8、BF16、reference-only
+解冻、LR `1e-5`、5% S11 optimizer steps。训练输出为：
+
+`outputs/m3_mixed_s11_referenceonly_formal_27000_37000_20260914`
+
+首个日志点 `step=27010` 已完成；8 卡显存占用约 87 GB/卡，采样时主要 GPU
+利用率为 100%，说明正式训练已实际迭代而非仅创建进程。W&B 当前使用 offline
+模式，run id 为 `gcuvx8rp`。
