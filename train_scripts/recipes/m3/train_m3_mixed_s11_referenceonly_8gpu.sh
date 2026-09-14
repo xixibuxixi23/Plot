@@ -17,6 +17,7 @@ COLLECTION_LOG_DIR="${COLLECTION_LOG_DIR:-${S11_ROOT}/cluster_logs/train_5x32}"
 CUDA_DEVICES="${CUDA_DEVICES:-0,1,2,3,4,5,6,7}"
 S11_STEP_PROBABILITY="${S11_STEP_PROBABILITY:-0.05}"
 FINAL_STEP="${FINAL_STEP:-37000}"
+EXCLUDED_GROUPS="${EXCLUDED_GROUPS:-train-S11-appearance-000025,train-S11-appearance-000096}"
 
 mkdir -p "${OUTPUT_DIR}"
 cd "${PLOT_ROOT}"
@@ -47,7 +48,8 @@ done
 PYTHONPATH="${PLOT_ROOT}" "${PLOT_ROOT}/.venv/bin/python" \
   dataset_toolkits/build_s11_counterfactual_index.py "${S11_ROOT}" \
   --output "${INDEX_PATH}" --split train --offsets 0,24,48,72 \
-  --targets 0,1,2,3 --variants-per-group 4
+  --targets 0,1,2,3 --variants-per-group 4 \
+  --exclude-groups "${EXCLUDED_GROUPS}"
 
 # Do not steal a GPU if another experiment appeared while collection ran.
 while [[ -n "$(nvidia-smi --query-compute-apps=pid --format=csv,noheader | sed '/^[[:space:]]*$/d')" ]]; do

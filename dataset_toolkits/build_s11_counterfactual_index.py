@@ -24,6 +24,10 @@ def _integers(value: str) -> list[int]:
     return result
 
 
+def _strings(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
@@ -36,6 +40,10 @@ def main() -> None:
     )
     parser.add_argument("--targets", type=_integers, default=_integers("0,1,2,3"))
     parser.add_argument("--variants-per-group", type=int, default=4)
+    parser.add_argument(
+        "--exclude-groups", type=_strings, default=[],
+        help="comma-separated appearance_group_id values rejected by a paired-data audit",
+    )
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -54,10 +62,15 @@ def main() -> None:
 
     complete = []
     skipped = {}
+    excluded = {}
+    excluded_groups = set(args.exclude_groups)
     expected = list(range(args.variants_per_group))
     for group, rows in sorted(grouped.items()):
         rows.sort()
         variants = [row[0] for row in rows]
+        if group in excluded_groups:
+            excluded[group] = variants
+            continue
         if variants == expected:
             complete.extend(rows)
         else:
@@ -99,7 +112,11 @@ def main() -> None:
         "context_frames": args.context_frames,
         "stride": None,
         "path_mode": "relative_to_dataset_root",
-        "selection": {"model_start_offsets": args.offsets, "targets": args.targets},
+        "selection": {
+            "model_start_offsets": args.offsets,
+            "targets": args.targets,
+            "excluded_groups": sorted(excluded_groups),
+        },
         "variants_per_group": args.variants_per_group,
         "item_vocabulary": item_vocabulary,
         "episodes": episodes,
@@ -115,6 +132,7 @@ def main() -> None:
         "episodes": len(episodes),
         "windows": len(windows),
         "skipped_incomplete_groups": skipped,
+        "excluded_groups": excluded,
     }, indent=2))
 
 
