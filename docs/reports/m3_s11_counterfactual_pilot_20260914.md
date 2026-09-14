@@ -109,3 +109,33 @@ conditioning delta 为 0.1384--0.2566，正确 reference 的人物 L1 比错位 
 3. 分开报告 reference binding 与画质。当前实验解决了前者，后者仍需正式 M3 训练。
 4. 正式训练继续保留正确/错位 reference paired audit，防止普通重建 loss 改善时再次
    忽略外观条件。
+
+## 未见轨迹泛化与混合训练复核
+
+后续另采 5 条完全未见 base trajectory、每条 4 个循环外观版本作为固定
+`val_id`。扩大后的密封场地避免海洋 seed 淹没采集区域；20/20 episode usable。
+审计窗口统一按每个 episode 的 `model_start_observation` 取相对 offsets
+0/24/48/72，从而排除并行启动造成的初始化帧数差异。
+
+旧的四视图 UI 贴图直接投影方案已排除：训练和以下审计均只使用统一的
+ROI-masked reference attention，不启用 `--view-aware-appearance`。
+
+| checkpoint / 配置 | 正确 reference 更优 | 严格通过窗口 | reference-sensitive | correct player L1 |
+|---|---:|---:|---:|---:|
+| 26900，未见轨迹基线 | 72 / 80 | 12 / 20 | 20 / 20 | 0.1577 |
+| 26925，20% step、解冻 8 层 | 72 / 80 | 13 / 20 | 20 / 20 | 0.1542 |
+| 26950，20% step、解冻 8 层 | 69 / 80 | 10 / 20 | 20 / 20 | 0.1671 |
+| 26950，reference-only 温和版 | 75 / 80 | 15 / 20 | 20 / 20 | 0.1550 |
+| 27000，reference-only 温和版 | 75 / 80 | 15 / 20 | 20 / 20 | 0.1538 |
+
+激进版在 50 steps 已出现退化。温和版从相同 26900 起点只训练 reference
+encoder/adapter（803,168 / 461,335,888 参数），LR `1e-5`，反事实差分权重
+`0.1`；100 steps 后同时改善因果正确率、严格窗口数和人物 L1，因此选择
+`step_0027000.pt` 作为正式续训起点。
+
+正式训练等待 100 个完整 group（400 episodes）采集完毕后启动。由于每个 S11
+item 会展开成 4 个 sibling clips，正式配置使用 5% S11 optimizer steps；在 8 卡
+batch 1 下约为 17% 实际 S11 clips，而不是把 20% step 错当成 20% 样本。自动启动
+recipe 为：
+
+`train_scripts/recipes/m3/train_m3_mixed_s11_referenceonly_8gpu.sh`
