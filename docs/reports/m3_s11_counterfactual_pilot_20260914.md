@@ -144,8 +144,13 @@ recipe 为：
 
 S11 正式训练集已按 **5 台物理机器 × 每台 32 个 worker = 160 个采集进程**
 完成。采集显式禁用 CUDA，并使用软件渲染，因此不占用训练 GPU。160 个 shard
-全部正常结束，最终得到 100 个完整 group、400 个 usable episode 和 6,400 个
-65-frame 训练窗口；没有 incomplete group。完整索引为：
+全部正常结束，原始收集得到 100 个完整 group 和 400 个 validation-usable episode。
+
+随后对全部 100 组做配对条件审计。98 组的相对人物轨迹、相机、动作和 voxel
+anchor 严格一致；组 000025 和 000096 的某个 variant 相对 voxel anchor 偏移 1 格，
+不满足“只改变外观”，因此从反事实训练索引排除，而不是强行 canonicalize。最终
+训练索引包含 98 个 group、392 个 episode 和 6,272 个 65-frame 窗口；没有
+incomplete group。完整索引为：
 
 `derived/s11/mixed_train_v2_complete_g100_c65.pt`
 
@@ -156,6 +161,12 @@ S11 正式训练集已按 **5 台物理机器 × 每台 32 个 worker = 160 个�
 
 `outputs/m3_mixed_s11_referenceonly_formal_27000_37000_20260914`
 
-首个日志点 `step=27010` 已完成；8 卡显存占用约 87 GB/卡，采样时主要 GPU
-利用率为 100%，说明正式训练已实际迭代而非仅创建进程。W&B 当前使用 offline
-模式，run id 为 `gcuvx8rp`。
+初次启动在第二个 S11 step 暴露出 fresh-server 全场平移和浮点微差被绝对相等
+校验误判的问题。提交 `0752211` 改为验证允许的全场平移并 canonicalize
+非外观条件，仍保留各 variant 自己的 RGB 和 player reference；提交 `2b3d54f`
+把配对审计不合格的两组显式记录并排除。完整回归测试为 118 passed。
+
+最终训练进程 PID 为 `3094912`，W&B offline run id 为 `n5rulijs`。训练已到
+`step=27030`，并成功越过 `27011`、`27023` 两个 S11 配对 step。8 卡显存占用
+约 87 GB/卡，观测时 8 卡利用率均为 100%。前 30 step 约 4.5 秒/step；不含
+验证开销的剩余时间约 12.6 小时，计入验证和 checkpoint 后预计约 13--15 小时。
