@@ -23,9 +23,6 @@ if [[ -n "$resume" ]]; then
   checkpoint_path=$resume
   checkpoint_args=(--resume "$resume")
 fi
-if [[ ${RESET_UNIFIED_REFERENCE_ADAPTER:-0} == 1 ]]; then
-  checkpoint_args+=(--reset-unified-reference-adapter)
-fi
 
 for required_path in "$python_bin" "$dataset_root" "$checkpoint_path" "$identity_checkpoint"; do
   if [[ ! -e "$required_path" ]]; then
