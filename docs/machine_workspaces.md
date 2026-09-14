@@ -4,24 +4,25 @@ This page records directory roles, not credentials or network addresses. The
 Git commit in the run registry is authoritative; a directory name or branch
 prefix does not identify the hardware that created a commit.
 
-## Current assignment (2026-09-13 UTC audit)
+## Current assignment (2026-09-14 UTC)
 
-All three current cluster nodes see the same
+The two M3 workers see the same
 `/public/0_DATA/2_Avatar/zhizhou_share/rcz` filesystem. Hardware was checked
-with `nvidia-smi`: both assigned training hosts contain eight NVIDIA H200 GPUs.
-The names below are host roles, not assumptions inferred from SSH aliases.
+with `nvidia-smi`: each contains eight NVIDIA H200 GPUs. M1 runs on an
+independent eight-GPU H100 host with `/data/huangyh/hxh` storage. The names
+below are host roles, not assumptions inferred from SSH aliases.
 
 | Host / hardware | Assigned role | Development workspace | Training workspace | Rule |
 |---|---|---|---|---|
-| `zhizhou-avgen-2` / 8x H200 | M1 | shared `Plot` on `main` or a short-lived feature branch | shared `Plot-runs/m1_h200_flow_resume1476000_20260913`, detached and not launched | Resume only after strict-load, fixed-batch, and multi-GPU smoke checks of the selected step-1,476,000 checkpoint. Do not develop in legacy `Polis`. |
-| `js-public` / 8x H200 | M3 | shared `Plot` on `main` or a short-lived feature branch | shared `Plot-runs/m3_h200_identity_resume26000_20260914`, detached at `172f278` and not launched | The next M3 stage starts from step 26,000 plus the step-3,300 player-identity encoder; do not fall back silently to step 25,000. |
-| historical independent host / 8x H100 | checkpoint source only | historical `Plot`/`Plot-dev` workspaces | historical stopped outputs | Do not launch new training here. Preserve it until selected M3 checkpoints and evidence are verified on shared storage. |
+| independent `H100-02` / 8x H100 | M1 | `/data/huangyh/hxh/Plot-dev`; update from GitHub `main` only | `/data/huangyh/hxh/Plot-runs/m1_h100_flow_resume1476000_20260914`, detached at `4a18d3b` | Stage and checksum the exact 46,200-sample legacy S01 cache and selected step-1,476,000 checkpoint before smoke testing. The balanced compact release cannot recreate this cache exactly. |
+| `zhizhou-avgen-2` / 8x H200 | M3 node 0 | shared `Plot` for development only | shared `Plot-runs/m3_h200_identity_resume26000_20260914`, detached at `4a18d3b` | Launch rank 0 with socket NCCL on the dedicated multi-node rendezvous port. |
+| `js-public` / 8x H200 | M3 node 1 | shared `Plot` for development only | the same shared detached M3 worktree | Launch rank 1 against `zhizhou-avgen-2`; both nodes jointly form one 16-GPU job. |
 
-No M1 or M3 training process was active at the 2026-09-13 UTC audit.
-Preserve both output directories and do not report a prepared worktree as a
-running job. The legacy `Polis` workspace and the independent H100 workspaces
-predate the final layout and remain explicit exceptions until their outputs
-and branches are archived.
+M3 identity-supervision training is active on the two H200 workers from step
+26,000 to the step-26,500 evaluation gate. M1 is staged separately on H100 and
+must not be reported as active until asset verification and the resume smoke
+test pass. The legacy `Polis` workspace remains read-only checkpoint/cache
+provenance, not a development checkout.
 
 ## Required layout for the next run
 
