@@ -28,9 +28,34 @@ def _sample_blockwise_train_time(batch_size, total_frames, block_frames, device,
     return time
 
 
+def mask_renderer_prefix_players(
+    rgb, player_region_mask, *, probability, fill_value=0.5, generator=None
+):
+    """Hide other-player pixels in the known prefix as training augmentation.
+
+    The dataset mask excludes the observing target slot. It is used to corrupt
+    RGB before VAE encoding and is never passed to the renderer as a condition.
+    """
+    if rgb.ndim != 5 or player_region_mask.shape != (
+        len(rgb), rgb.shape[1], 1, rgb.shape[-2], rgb.shape[-1]
+    ):
+        raise ValueError("RGB and player_region_mask must be aligned [B,T,C,H,W]")
+    if not 0 <= probability <= 1:
+        raise ValueError("prefix player mask probability must be between 0 and 1")
+    if probability == 0:
+        return rgb
+    apply = torch.rand(
+        (len(rgb), 1, 1, 1, 1), device=rgb.device, generator=generator
+    ) < probability
+    mask = player_region_mask[:, :1].bool() & apply
+    result = rgb.clone()
+    result[:, :1] = torch.where(mask, result.new_tensor(fill_value), result[:, :1])
+    return result
+
+
 def renderer_flow_loss(
     model, clean, conditions, *, region_weight=None, generator=None,
-    return_clean_prediction=False,
+    return_clean_prediction=False, return_train_time=False,
 ):
     """Block-causal diffusion-forcing loss with frame zero known.
 
@@ -66,10 +91,13 @@ def renderer_flow_loss(
         if weight.shape != expected:
             raise ValueError("region_weight must be [B,T,1,H,W]")
         loss = (error * weight).sum() / (weight.sum().clamp_min(1) * clean.shape[2])
+    if return_train_time and not return_clean_prediction:
+        raise ValueError("return_train_time requires return_clean_prediction")
     if return_clean_prediction:
         # For v = epsilon - x_0 and x_t = (1-t)x_0 + t epsilon,
         # x_0 = x_t - t*v. Pixel supervision decodes only selected frames.
-        return loss, noisy - tau * prediction
+        result = (loss, noisy - tau * prediction)
+        return (*result, time) if return_train_time else result
     return loss
 
 
@@ -279,6 +307,8 @@ def renderer_player_identity_loss(
     player_identity_valid,
     *,
     player_appearance_valid=None,
+    noise_time=None,
+    min_noise=0.0,
     margin=0.2,
     negative_weight=0.5,
 ):
@@ -308,6 +338,8 @@ def renderer_player_identity_loss(
         raise ValueError("player_reference must be [B,A,4,4,H,W]")
     if margin < 0 or negative_weight < 0:
         raise ValueError("identity margin and negative weight must be nonnegative")
+    if not 0 <= min_noise <= 1:
+        raise ValueError("identity min_noise must be between 0 and 1")
     indices = torch.arange(batch, device=clean_prediction.device)
     frames = player_identity_frame.long().clamp(0, clean_prediction.shape[1] - 1)
     slots = player_identity_slot.long().clamp(0, player_reference.shape[1] - 1)
@@ -317,6 +349,12 @@ def renderer_player_identity_loss(
         decoded, player_identity_mask, output_size=identity_encoder.crop_size
     )
     valid = player_identity_valid.bool() & crop_valid
+    if noise_time is not None:
+        if noise_time.shape != clean_prediction.shape[:2]:
+            raise ValueError("identity noise_time must be [B,T]")
+        valid &= noise_time[indices, frames] >= min_noise
+    elif min_noise > 0:
+        raise ValueError("positive identity min_noise requires sampled noise times")
     selected_reference = player_reference[indices, slots]
     with torch.no_grad():
         reference_embedding = identity_encoder.encode_reference(selected_reference)
@@ -386,6 +424,7 @@ def renderer_training_losses(
     player_identity_slot=None,
     player_identity_valid=None,
     player_identity_loss_weight=0.0,
+    player_identity_min_noise=0.0,
     player_identity_margin=0.2,
     player_identity_negative_weight=0.5,
     generator=None,
@@ -411,12 +450,17 @@ def renderer_training_losses(
         region_weight=region_weight,
         generator=generator,
         return_clean_prediction=use_pixels or use_identity,
+        return_train_time=use_identity,
     )
-    if use_pixels or use_identity:
+    if use_identity:
+        flow_loss, clean_prediction, train_time = result
+    elif use_pixels:
         flow_loss, clean_prediction = result
+        train_time = None
     else:
         flow_loss = result
         clean_prediction = None
+        train_time = None
     if use_pixels:
         pixels = renderer_pixel_losses(
             codec,
@@ -452,6 +496,8 @@ def renderer_training_losses(
             player_identity_slot,
             player_identity_valid,
             player_appearance_valid=conditions.get("player_appearance_valid"),
+            noise_time=train_time,
+            min_noise=player_identity_min_noise,
             margin=player_identity_margin,
             negative_weight=player_identity_negative_weight,
         )

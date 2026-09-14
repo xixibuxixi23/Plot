@@ -6,11 +6,13 @@ import torch
 from plot.data.fill_dataset import BlockVocabulary
 from plot.data.renderer_dataset import incoming_actions, merge_observation_crops, raster_camera
 from plot.models.renderer import Renderer, RendererArgs
+from plot.models.renderer_backbone.dit_pixel import UnifiedPlayerReferenceAdapter
 from plot.models.renderer_backbone.player_spatial_condition import ViewAwarePlayerAppearance
 from plot.pipelines.renderer_pipeline import RendererMemoryBlock
 from plot.training.renderer_trainer import (
     RendererRollout,
     _sample_blockwise_train_time,
+    mask_renderer_prefix_players,
     renderer_flow_loss,
     renderer_pixel_losses,
     renderer_training_losses,
@@ -87,6 +89,19 @@ def test_training_time_is_clean_for_prefix_and_shared_within_each_block():
     torch.testing.assert_close(time[:, 0], torch.zeros(2))
     torch.testing.assert_close(time[:, 1:9], time[:, 1:2].expand(-1, 8))
     torch.testing.assert_close(time[:, 9:17], time[:, 9:10].expand(-1, 8))
+
+
+def test_training_prefix_mask_hides_only_other_player_pixels():
+    rgb = torch.zeros(2, 3, 3, 4, 4)
+    mask = torch.zeros(2, 3, 1, 4, 4, dtype=torch.bool)
+    mask[:, 0, :, 1:3, 1:3] = True
+    masked = mask_renderer_prefix_players(rgb, mask, probability=1, fill_value=0.5)
+    assert masked[:, 0, :, 1:3, 1:3].eq(0.5).all()
+    assert masked[:, 0, :, 0, 0].eq(0).all()
+    assert masked[:, 1:].eq(0).all()
+    torch.testing.assert_close(
+        mask_renderer_prefix_players(rgb, mask, probability=0), rgb
+    )
 
 
 def test_training_backward_and_supervision_only_masks():
@@ -238,6 +253,7 @@ def test_unified_player_reference_is_the_only_appearance_route_and_uses_all_view
     unified = Renderer(replace(
         base.cfg,
         unified_player_reference=True,
+        unified_reference_blocks=2,
     )).eval()
     incompatible = unified.load_state_dict(base.state_dict(), strict=False)
     assert not incompatible.missing_keys or all(
@@ -283,6 +299,15 @@ def test_unified_player_reference_is_the_only_appearance_route_and_uses_all_view
     )
 
     x, time = torch.randn(1, 9, 16, 4, 4), torch.rand(1, 9)
+    adapter_calls = []
+    handle = unified.core.unified_reference_adapter.register_forward_hook(
+        lambda *_: adapter_calls.append(1)
+    )
+    with torch.no_grad():
+        unified(x, time, cond)
+    handle.remove()
+    assert len(adapter_calls) == unified.cfg.unified_reference_blocks == 2
+
     with torch.no_grad():
         zero_outputs = []
         for view in range(4):
@@ -309,6 +334,26 @@ def test_unified_player_reference_is_the_only_appearance_route_and_uses_all_view
     unified(x, time, cond).square().mean().backward()
     grad = unified.core.unified_reference_adapter.to_output.weight.grad
     assert grad is not None and grad.abs().sum() > 0
+
+
+def test_unified_player_reference_keeps_actors_separate_before_roi_composition():
+    torch.manual_seed(7)
+    adapter = UnifiedPlayerReferenceAdapter(
+        hidden_size=8, reference_dim=6, attention_dim=4, value_dim=5
+    ).eval()
+    x = torch.randn(1, 1, 1, 2, 8)
+    reference = torch.randn(1, 2, 4, 3, 6)
+    valid = torch.ones(1, 2, 4, dtype=torch.bool)
+    roi = torch.zeros(1, 1, 2, 1, 2)
+    roi[:, :, 0, :, 0] = 1
+    roi[:, :, 1, :, 1] = 1
+    with torch.no_grad():
+        expected = adapter(x, reference, roi, valid)
+        changed = reference.clone()
+        changed[:, 1] = torch.randn_like(changed[:, 1]) * 3
+        actual = adapter(x, changed, roi, valid)
+    torch.testing.assert_close(actual[..., 0, :], expected[..., 0, :], rtol=0, atol=0)
+    assert not torch.allclose(actual[..., 1, :], expected[..., 1, :])
 
 
 def test_view_aware_appearance_preserves_reference_pixels_and_selects_back_view():

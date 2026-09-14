@@ -25,7 +25,10 @@ from plot.models.renderer_codec import RendererCodec
 from plot.models.player_identity import PlayerIdentityEncoder
 from plot.checkpoint_io import record_checkpoint_failure, staged_torch_save
 from plot.training.renderer_monitoring import render_probe, save_probe_manifest, select_renderer_probes
-from plot.training.renderer_trainer import renderer_training_losses
+from plot.training.renderer_trainer import (
+    mask_renderer_prefix_players,
+    renderer_training_losses,
+)
 
 
 LOSS_NAMES = (
@@ -119,9 +122,15 @@ def main():
         "--unified-player-reference",
         action="store_true",
         help=(
-            "Use one input-level all-view player reference adapter; replaces pooled, "
+            "Use one shared late-block all-view reference adapter; replaces pooled, "
             "view-warped and per-block reference appearance paths"
         ),
+    )
+    parser.add_argument("--unified-reference-blocks", type=int, default=4)
+    parser.add_argument(
+        "--reset-unified-reference-adapter",
+        action="store_true",
+        help="Warm-start the reference encoder while reinitializing the shared adapter",
     )
     parser.add_argument(
         "--freeze-base-for-appearance",
@@ -191,6 +200,12 @@ def main():
         help="Probability of applying the player-region flow upweight per sample",
     )
     parser.add_argument(
+        "--player-prefix-mask-probability",
+        type=float,
+        default=0.0,
+        help="Training-only probability of hiding other players in the known RGB prefix",
+    )
+    parser.add_argument(
         "--pixel-loss-frames",
         type=int,
         default=2,
@@ -204,6 +219,7 @@ def main():
     parser.add_argument("--damaged-health-upweight", type=float, default=4.0)
     parser.add_argument("--player-identity-checkpoint")
     parser.add_argument("--player-identity-loss-weight", type=float, default=0.0)
+    parser.add_argument("--player-identity-min-noise", type=float, default=0.0)
     parser.add_argument("--player-identity-margin", type=float, default=0.2)
     parser.add_argument("--player-identity-negative-weight", type=float, default=0.5)
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -260,6 +276,14 @@ def main():
         parser.error(
             "--unified-player-reference replaces all legacy appearance/reference flags"
         )
+    if args.unified_player_reference and not 1 <= args.unified_reference_blocks <= args.depth:
+        parser.error("--unified-reference-blocks must be between 1 and depth")
+    if args.reset_unified_reference_adapter and not (
+        args.unified_player_reference and args.warm_start
+    ):
+        parser.error(
+            "--reset-unified-reference-adapter requires unified reference warm-starting"
+        )
     if args.appearance_unfreeze_last_spatial_blocks and not args.freeze_base_for_appearance:
         parser.error(
             "--appearance-unfreeze-last-spatial-blocks requires "
@@ -275,6 +299,10 @@ def main():
         parser.error("--reference-unfreeze-last-spatial-blocks must be between 0 and depth")
     if not 0 <= args.player_mask_probability <= 1:
         parser.error("--player-mask-probability must be between 0 and 1")
+    if not 0 <= args.player_prefix_mask_probability <= 1:
+        parser.error("--player-prefix-mask-probability must be between 0 and 1")
+    if not 0 <= args.player_identity_min_noise <= 1:
+        parser.error("--player-identity-min-noise must be between 0 and 1")
     if args.unfrozen_base_lr_scale <= 0:
         parser.error("--unfrozen-base-lr-scale must be positive")
     if args.player_identity_loss_weight > 0 and not args.player_identity_checkpoint:
@@ -370,6 +398,7 @@ def main():
         detail_preserving_appearance=args.detail_preserving_appearance,
         entity_reference_attention=args.entity_reference_attention,
         unified_player_reference=args.unified_player_reference,
+        unified_reference_blocks=args.unified_reference_blocks,
     )
     with torch.cuda.device(device):
         raw_model = Renderer(cfg).to(device).train()
@@ -474,13 +503,13 @@ def main():
         warm_state = dict(checkpoint["model"])
         migrated_parameters = []
         if args.unified_player_reference:
-            # Reuse the trained first legacy reference adapter for the single
-            # input-level adapter. Shapes are identical; only routing retains
-            # the four-view axis instead of pre-averaging it.
+            # Compatible experiments may reuse the first legacy adapter.
+            # Changed injection schedules explicitly reset it while retaining
+            # the trained reference encoder and backbone.
             old_prefix = "core.entity_reference_adapters.0."
             new_prefix = "core.unified_reference_adapter."
             for key, value in list(warm_state.items()):
-                if key.startswith(old_prefix):
+                if key.startswith(old_prefix) and not args.reset_unified_reference_adapter:
                     new_key = new_prefix + key[len(old_prefix):]
                     warm_state[new_key] = value
                     migrated_parameters.append(f"{key}->{new_key}")
@@ -499,6 +528,11 @@ def main():
                 key: value for key, value in warm_state.items()
                 if not key.startswith(legacy_prefixes)
             }
+            if args.reset_unified_reference_adapter:
+                warm_state = {
+                    key: value for key, value in warm_state.items()
+                    if not key.startswith(new_prefix)
+                }
         incompatible = raw_model.load_state_dict(warm_state, strict=False)
         allowed_missing = (
             "core.hud_condition_embedder.",
@@ -616,6 +650,7 @@ def main():
         "damaged_health_upweight": args.damaged_health_upweight,
         "identity_encoder": identity_encoder,
         "player_identity_loss_weight": args.player_identity_loss_weight,
+        "player_identity_min_noise": args.player_identity_min_noise,
         "player_identity_margin": args.player_identity_margin,
         "player_identity_negative_weight": args.player_identity_negative_weight,
     }
@@ -632,11 +667,16 @@ def main():
                 iterator = iter(loader)
                 batch = next(iterator)
             rgb = batch["rgb"].to(device)
+            model_rgb = mask_renderer_prefix_players(
+                rgb,
+                batch["player_region_mask"].to(device),
+                probability=args.player_prefix_mask_probability,
+            )
             with (
                 torch.no_grad(),
                 torch.autocast("cuda", dtype=torch.bfloat16, enabled=args.precision == "bf16"),
             ):
-                latent = codec.encode(rgb)
+                latent = codec.encode(model_rgb)
             conditions = {k: v.to(device) for k, v in batch["conditions"].items()}
             sync = (
                 model.no_sync()

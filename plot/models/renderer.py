@@ -41,6 +41,7 @@ class RendererArgs:
     detail_preserving_appearance: bool = False
     entity_reference_attention: bool = False
     unified_player_reference: bool = False
+    unified_reference_blocks: int = 4
 
 
 class ResidentConditionEncoder(MultiAgentRenderConditionEncoder):
@@ -127,6 +128,8 @@ class Renderer(nn.Module):
             raise ValueError(
                 "unified player reference replaces all legacy appearance/reference paths"
             )
+        if cfg.unified_player_reference and not 1 <= cfg.unified_reference_blocks <= cfg.depth:
+            raise ValueError("unified_reference_blocks must be between 1 and DiT depth")
         if cfg.cache_frames < cfg.block_frames or cfg.context_frames < 1 + cfg.block_frames:
             raise ValueError("M3 requires room for one output block and its prefix")
         if (cfg.context_frames - 1) % cfg.block_frames:
@@ -164,6 +167,9 @@ class Renderer(nn.Module):
             detail_preserving_appearance=cfg.detail_preserving_appearance,
             entity_reference_dim=256 if cfg.entity_reference_attention else 0,
             unified_reference_dim=256 if cfg.unified_player_reference else 0,
+            unified_reference_blocks=(
+                cfg.unified_reference_blocks if cfg.unified_player_reference else 0
+            ),
             gradient_checkpointing=cfg.gradient_checkpointing,
             aggregation_config={} if cfg.gpu_rasterizer else None)
 

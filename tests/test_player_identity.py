@@ -110,6 +110,31 @@ def test_renderer_identity_loss_uses_correct_reference_and_backpropagates():
     assert prediction.grad[:, 1].abs().sum() > 0
 
 
+def test_renderer_identity_loss_can_ignore_low_noise_shortcuts():
+    prediction = torch.zeros(1, 2, 3, 8, 8, requires_grad=True)
+    reference = torch.zeros(1, 2, 4, 4, 8, 8)
+    reference[:, 0, :, 0] = 1
+    reference[:, :, :, 3] = 1
+    common = dict(
+        player_appearance_valid=torch.ones(1, 2, 4, dtype=torch.bool),
+        noise_time=torch.tensor([[0.0, 0.4]]),
+        min_noise=0.6,
+    )
+    result = renderer_player_identity_loss(
+        _IdentityCodec(),
+        _ColorIdentity(),
+        prediction,
+        reference,
+        torch.ones(1, 1, 8, 8),
+        torch.tensor([1]),
+        torch.tensor([0]),
+        torch.tensor([True]),
+        **common,
+    )
+    assert result["player_identity_loss"] == 0
+    assert result["player_identity_similarity"] == 0
+
+
 def test_reference_audit_identity_metric_maps_future_frame_index():
     prediction = torch.zeros(3, 3, 8, 8)
     prediction[1, 0] = 1
