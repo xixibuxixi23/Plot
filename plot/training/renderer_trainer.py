@@ -15,14 +15,32 @@ def slice_conditions(cond, start, end):
             for key, value in cond.items()}
 
 
-def _sample_blockwise_train_time(batch_size, total_frames, block_frames, device, generator=None):
+def _sample_blockwise_train_time(
+    batch_size, total_frames, block_frames, device, generator=None,
+    counterfactual_group_size=1,
+):
     """Keep the observed prefix clean and assign one noise time per future block."""
     future_frames = total_frames - 1
     if future_frames < block_frames or future_frames % block_frames:
         raise ValueError("future training frames must contain complete output blocks")
-    block_time = torch.rand(
-        batch_size, future_frames // block_frames, device=device, generator=generator,
-    )
+    if counterfactual_group_size < 1 or batch_size % counterfactual_group_size:
+        raise ValueError("batch size must be divisible by counterfactual group size")
+    groups = batch_size // counterfactual_group_size
+    if counterfactual_group_size > 1:
+        # Counterfactual siblings have different clean player pixels. At an
+        # ordinary interpolation time, those pixels remain in x_t and let the
+        # network reconstruct the appearance without reading its reference.
+        # Put dedicated counterfactual batches at the pure-noise endpoint so
+        # every sibling receives exactly the same future latent; appearance is
+        # then identifiable only from the per-player reference condition.
+        block_time = torch.ones(
+            groups, future_frames // block_frames, device=device,
+        )
+    else:
+        block_time = torch.rand(
+            groups, future_frames // block_frames, device=device, generator=generator,
+        )
+    block_time = block_time.repeat_interleave(counterfactual_group_size, dim=0)
     time = torch.zeros(batch_size, total_frames, device=device)
     time[:, 1:] = block_time.repeat_interleave(block_frames, dim=1)
     return time
@@ -30,7 +48,7 @@ def _sample_blockwise_train_time(batch_size, total_frames, block_frames, device,
 
 def renderer_flow_loss(
     model, clean, conditions, *, region_weight=None, generator=None,
-    return_clean_prediction=False,
+    return_clean_prediction=False, counterfactual_group_size=1,
 ):
     """Block-causal diffusion-forcing loss with frame zero known.
 
@@ -52,8 +70,12 @@ def renderer_flow_loss(
     block_frames = base.cfg.block_frames
     time = _sample_blockwise_train_time(
         len(clean), clean.shape[1], block_frames, clean.device, generator,
+        counterfactual_group_size,
     )
-    noise = torch.randn(clean.shape, device=clean.device, dtype=clean.dtype, generator=generator)
+    noise = torch.randn(
+        (len(clean) // counterfactual_group_size, *clean.shape[1:]),
+        device=clean.device, dtype=clean.dtype, generator=generator,
+    ).repeat_interleave(counterfactual_group_size, dim=0)
     tau = time[..., None, None, None]
     noisy = (1 - tau) * clean + tau * noise
     prediction = model(noisy, time, c)
@@ -71,6 +93,30 @@ def renderer_flow_loss(
         # x_0 = x_t - t*v. Pixel supervision decodes only selected frames.
         return loss, noisy - tau * prediction
     return loss
+
+
+def renderer_counterfactual_player_loss(
+    clean_prediction, clean, player_region_mask, group_size,
+):
+    """Match appearance-induced latent differences inside other-player ROIs."""
+    if group_size < 2:
+        return clean_prediction.sum() * 0
+    batch, frames = clean.shape[:2]
+    if batch % group_size or player_region_mask.shape[:2] != (batch, frames):
+        raise ValueError("counterfactual predictions/masks must form complete groups")
+    groups = batch // group_size
+    predicted = clean_prediction.reshape(groups, group_size, *clean_prediction.shape[1:])
+    target = clean.reshape(groups, group_size, *clean.shape[1:])
+    mask = player_region_mask.float().flatten(0, 1)
+    mask = F.interpolate(mask, size=clean.shape[-2:], mode="area")
+    mask = mask.unflatten(0, (batch, frames)).reshape(
+        groups, group_size, frames, 1, *clean.shape[-2:]
+    )
+    predicted_difference = predicted[:, 1:, 1:] - predicted[:, :1, 1:]
+    target_difference = target[:, 1:, 1:] - target[:, :1, 1:]
+    roi = torch.maximum(mask[:, 1:, 1:], mask[:, :1, 1:])
+    error = (predicted_difference.float() - target_difference.float()).square()
+    return (error * roi).sum() / (roi.sum().clamp_min(1) * clean.shape[2])
 
 
 def _masked_mean(value, mask):
@@ -388,6 +434,8 @@ def renderer_training_losses(
     player_identity_loss_weight=0.0,
     player_identity_margin=0.2,
     player_identity_negative_weight=0.5,
+    counterfactual_group_size=1,
+    counterfactual_player_difference_weight=0.0,
     generator=None,
 ):
     """Combine latent flow matching with sparse full-resolution supervision."""
@@ -398,10 +446,14 @@ def renderer_training_losses(
         "player_pixel_edge": float(player_pixel_edge_weight),
         "health_pixel_l1": float(health_pixel_l1_weight),
     }
-    if min(*weights.values(), player_identity_loss_weight) < 0:
+    if min(*weights.values(), player_identity_loss_weight,
+           counterfactual_player_difference_weight) < 0:
         raise ValueError("pixel loss weights must be nonnegative")
     use_pixels = any(weight > 0 for weight in weights.values())
     use_identity = player_identity_loss_weight > 0
+    use_counterfactual = counterfactual_player_difference_weight > 0
+    if use_counterfactual and player_region_mask is None:
+        raise ValueError("counterfactual appearance loss requires player_region_mask")
     if use_identity and identity_encoder is None:
         raise ValueError("player identity loss requires a frozen identity encoder")
     result = renderer_flow_loss(
@@ -410,9 +462,10 @@ def renderer_training_losses(
         conditions,
         region_weight=region_weight,
         generator=generator,
-        return_clean_prediction=use_pixels or use_identity,
+        return_clean_prediction=use_pixels or use_identity or use_counterfactual,
+        counterfactual_group_size=counterfactual_group_size,
     )
-    if use_pixels or use_identity:
+    if use_pixels or use_identity or use_counterfactual:
         flow_loss, clean_prediction = result
     else:
         flow_loss = result
@@ -462,14 +515,23 @@ def renderer_training_losses(
             "player_identity_similarity": zero,
             "player_identity_ranking_accuracy": zero,
         }
+    counterfactual = (
+        renderer_counterfactual_player_loss(
+            clean_prediction, clean, player_region_mask, counterfactual_group_size
+        )
+        if use_counterfactual
+        else flow_loss.new_zeros(())
+    )
     auxiliary = sum(weights[name] * value for name, value in pixels.items())
     auxiliary = auxiliary + player_identity_loss_weight * identity["player_identity_loss"]
+    auxiliary = auxiliary + counterfactual_player_difference_weight * counterfactual
     return {
         "total_loss": flow_loss + auxiliary,
         "flow_loss": flow_loss,
         "auxiliary_loss": auxiliary,
         **pixels,
         **identity,
+        "counterfactual_player_difference_loss": counterfactual,
     }
 
 

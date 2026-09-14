@@ -20,6 +20,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 
 from plot.data.renderer_dataset import TextAgentRendererDataset, collate_renderer
+from plot.data.appearance_counterfactual_dataset import AppearanceCounterfactualRendererDataset
 from plot.models.renderer import Renderer, RendererArgs
 from plot.models.renderer_codec import RendererCodec
 from plot.models.player_identity import PlayerIdentityEncoder
@@ -40,6 +41,7 @@ LOSS_NAMES = (
     "player_identity_loss",
     "player_identity_similarity",
     "player_identity_ranking_accuracy",
+    "counterfactual_player_difference_loss",
 )
 
 
@@ -77,6 +79,10 @@ def build_flow_region_weight(
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset-root", required=True)
+    parser.add_argument(
+        "--train-split", choices=("train", "pilot"), default="train",
+        help="pilot is intended only for small controlled diagnostics such as S11",
+    )
     parser.add_argument("--vocabulary", required=True)
     parser.add_argument("--pixel-vae", required=True)
     parser.add_argument("--backbone-checkpoint")
@@ -86,6 +92,12 @@ def main():
     )
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--window-index")
+    parser.add_argument(
+        "--appearance-counterfactual",
+        action="store_true",
+        help="group complete S11 skin variants by identical trajectory/start/target",
+    )
+    parser.add_argument("--counterfactual-variants", type=int, default=4)
     parser.add_argument("--val-window-index")
     parser.add_argument("--health-focus-index")
     parser.add_argument(
@@ -206,6 +218,11 @@ def main():
     parser.add_argument("--player-identity-loss-weight", type=float, default=0.0)
     parser.add_argument("--player-identity-margin", type=float, default=0.2)
     parser.add_argument("--player-identity-negative-weight", type=float, default=0.5)
+    parser.add_argument("--counterfactual-player-difference-weight", type=float, default=0.0)
+    parser.add_argument(
+        "--mask-prefix-player-probability", type=float, default=0.0,
+        help="replace visible other-player pixels in the observed prefix with mid-gray",
+    )
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument(
         "--unfrozen-base-lr-scale",
@@ -275,6 +292,12 @@ def main():
         parser.error("--reference-unfreeze-last-spatial-blocks must be between 0 and depth")
     if not 0 <= args.player_mask_probability <= 1:
         parser.error("--player-mask-probability must be between 0 and 1")
+    if not 0 <= args.mask_prefix_player_probability <= 1:
+        parser.error("--mask-prefix-player-probability must be between 0 and 1")
+    if args.appearance_counterfactual and args.target_views_per_window != 1:
+        parser.error("--appearance-counterfactual requires --target-views-per-window 1")
+    if args.counterfactual_player_difference_weight > 0 and not args.appearance_counterfactual:
+        parser.error("counterfactual difference loss requires --appearance-counterfactual")
     if args.unfrozen_base_lr_scale <= 0:
         parser.error("--unfrozen-base-lr-scale must be positive")
     if args.player_identity_loss_weight > 0 and not args.player_identity_checkpoint:
@@ -309,12 +332,15 @@ def main():
         args.player_identity_loss_weight,
         args.player_identity_margin,
         args.player_identity_negative_weight,
+        args.counterfactual_player_difference_weight,
     ) < 0:
         parser.error("region and pixel loss weights must be nonnegative")
     world = int(os.environ.get("WORLD_SIZE", "1"))
     rank = int(os.environ.get("RANK", "0"))
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     device = torch.device(f"cuda:{local_rank}" if world > 1 else args.device)
+    if device.type == "cuda" and device.index is None:
+        device = torch.device("cuda:0")
     if device.type != "cuda":
         parser.error(
             "raw voxel rasterization needs CUDA; use CPU contract tests for smoke validation"
@@ -330,15 +356,26 @@ def main():
     if world > 1:
         dist.init_process_group("nccl", device_id=device)
     torch.manual_seed(args.seed + rank)
-    dataset = TextAgentRendererDataset(
-        args.dataset_root,
-        args.vocabulary,
+    dataset_class = (
+        AppearanceCounterfactualRendererDataset
+        if args.appearance_counterfactual
+        else TextAgentRendererDataset
+    )
+    dataset_kwargs = dict(
+        split=args.train_split,
         context_frames=args.context_frames,
         window_index=args.window_index,
         targets_per_window=args.target_views_per_window,
         entity_region_upweight=args.latent_entity_region_upweight,
         health_focus_index=args.health_focus_index,
         health_focus_oversample=args.health_focus_oversample,
+    )
+    if args.appearance_counterfactual:
+        dataset_kwargs["variants_per_group"] = args.counterfactual_variants
+    dataset = dataset_class(
+        args.dataset_root,
+        args.vocabulary,
+        **dataset_kwargs,
     )
     sampler = (
         DistributedSampler(dataset, num_replicas=world, rank=rank, shuffle=True, seed=args.seed)
@@ -564,6 +601,7 @@ def main():
                 "effective_view_batch_size": (
                     args.batch_size
                     * args.target_views_per_window
+                    * getattr(dataset, "group_size", 1)
                     * world
                     * args.gradient_accumulation
                 ),
@@ -618,6 +656,10 @@ def main():
         "player_identity_loss_weight": args.player_identity_loss_weight,
         "player_identity_margin": args.player_identity_margin,
         "player_identity_negative_weight": args.player_identity_negative_weight,
+        "counterfactual_group_size": getattr(dataset, "group_size", 1),
+        "counterfactual_player_difference_weight": (
+            args.counterfactual_player_difference_weight
+        ),
     }
     for step in range(start_step + 1, args.steps + 1):
         optimizer.zero_grad(set_to_none=True)
@@ -632,6 +674,18 @@ def main():
                 iterator = iter(loader)
                 batch = next(iterator)
             rgb = batch["rgb"].to(device)
+            if args.mask_prefix_player_probability > 0:
+                group_size = getattr(dataset, "group_size", 1)
+                group_count = len(rgb) // group_size
+                gate = (torch.rand(group_count, device=device)
+                        < args.mask_prefix_player_probability)
+                gate = gate.repeat_interleave(group_size)
+                prefix_player = batch["player_region_mask"][:, :1].to(device).bool()
+                rgb = rgb.clone()
+                rgb[:, :1] = torch.where(
+                    gate[:, None, None, None, None] & prefix_player,
+                    rgb.new_tensor(0.5), rgb[:, :1],
+                )
             with (
                 torch.no_grad(),
                 torch.autocast("cuda", dtype=torch.bfloat16, enabled=args.precision == "bf16"),
@@ -714,6 +768,8 @@ def main():
                 f"health_l1={train_log['train/health_pixel_l1']:.6f} "
                 f"identity={train_log['train/player_identity_loss']:.6f} "
                 f"identity_sim={train_log['train/player_identity_similarity']:.4f} "
+                f"player_l1={train_log['train/player_pixel_l1']:.6f} "
+                f"counterfactual={train_log['train/counterfactual_player_difference_loss']:.6f} "
                 f"peak_reserved_max_gib={train_log['train/cuda_peak_reserved_max_gib']:.2f} "
                 f"{memory_text}",
                 flush=True,
@@ -733,6 +789,11 @@ def main():
                     ):
                         latent = codec.encode(rgb)
                         condition = {k: v.to(device) for k, v in val["conditions"].items()}
+                        val_loss_kwargs = dict(
+                            loss_kwargs,
+                            counterfactual_group_size=1,
+                            counterfactual_player_difference_weight=0.0,
+                        )
                         val_losses = renderer_training_losses(
                             raw_model,
                             codec,
@@ -755,7 +816,7 @@ def main():
                             generator=torch.Generator(device=device).manual_seed(
                                 args.seed + number
                             ),
-                            **loss_kwargs,
+                            **val_loss_kwargs,
                         )
                         values.append(torch.stack([val_losses[name] for name in LOSS_NAMES]))
             metric = (

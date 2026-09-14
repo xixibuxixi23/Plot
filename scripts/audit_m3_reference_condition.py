@@ -28,7 +28,10 @@ def _weights(path):
 
 
 @torch.no_grad()
-def _predict(model, codec, sample, *, seed, precision, mask_prefix_players=False):
+def _predict(
+    model, codec, sample, *, seed, precision, mask_prefix_players=False,
+    denoising_steps=20, horizon=64,
+):
     device = next(model.parameters()).device
     rgb = sample["rgb"][:, :65].to(device)
     if mask_prefix_players:
@@ -45,21 +48,28 @@ def _predict(model, codec, sample, *, seed, precision, mask_prefix_players=False
     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_bf16):
         latent = codec.encode(rgb)
         generator = torch.Generator(device=device).manual_seed(seed)
+        if horizon < model.cfg.block_frames or horizon % model.cfg.block_frames:
+            raise ValueError("audit horizon must contain complete renderer blocks")
         noise = torch.randn(
-            latent[:, 1:65].shape,
+            latent[:, 1:1 + horizon].shape,
             device=device,
             dtype=latent.dtype,
             generator=generator,
         )
-        rollout = RendererRollout(model, denoising_steps=20)
+        rollout = RendererRollout(model, denoising_steps=denoising_steps)
         try:
             rollout.start(latent[:, :1], slice_conditions(conditions, 0, 1))
-            prediction = codec.decode(
-                rollout.generate_64(noise, slice_conditions(conditions, 1, 65))
-            )[0]
+            future = slice_conditions(conditions, 1, 1 + horizon)
+            chunks = []
+            for start in range(0, horizon, model.cfg.block_frames):
+                end = start + model.cfg.block_frames
+                chunks.append(rollout.generate(
+                    noise[:, start:end], slice_conditions(future, start, end)
+                ))
+            prediction = codec.decode(torch.cat(chunks, dim=1))[0]
         finally:
             model.clear_cache()
-    return rgb[0, 1:65], prediction
+    return rgb[0, 1:1 + horizon], prediction
 
 
 def _masked_mean(value, mask):

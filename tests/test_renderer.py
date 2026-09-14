@@ -1,11 +1,16 @@
 from dataclasses import replace
+from types import SimpleNamespace
 import numpy as np
 import pytest
 import torch
 
 from plot.data.fill_dataset import BlockVocabulary
+from plot.data.appearance_counterfactual_dataset import AppearanceCounterfactualRendererDataset
 from plot.data.renderer_dataset import incoming_actions, merge_observation_crops, raster_camera
 from plot.models.renderer import Renderer, RendererArgs
+from plot.training.renderer_trainer import (
+    _sample_blockwise_train_time, renderer_counterfactual_player_loss,
+)
 from plot.models.renderer_backbone.player_spatial_condition import ViewAwarePlayerAppearance
 from plot.pipelines.renderer_pipeline import RendererMemoryBlock
 from plot.training.renderer_trainer import (
@@ -479,8 +484,8 @@ def test_continuous_dataset_preserves_state_time_and_splits(tmp_path, monkeypatc
              entity_render_object_id=np.tile([10,11],(t,1)).astype(np.uint16),
              entity_weapon_name=np.tile(['','sword'],(t,1)), entity_valid=np.ones((t,a),bool),
              instance_mask=np.stack((
-                 np.full((t,4,4),11,np.uint16),
-                 np.full((t,4,4),10,np.uint16),
+                 np.full((t,8,8),11,np.uint16),
+                 np.full((t,8,8),10,np.uint16),
              ),axis=1))
     for slot in range(a):
         root = tmp_path / 'players' / f'agent{slot}'
@@ -536,6 +541,66 @@ def test_continuous_dataset_preserves_state_time_and_splits(tmp_path, monkeypatc
     with pytest.raises(ValueError,match='no accepted'):
         module.TextAgentRendererDataset(tmp_path,BlockVocabulary((0,7)),split='test',context_frames=17)
 
+
+def test_counterfactual_groups_use_identical_pure_noise_and_supervise_target_difference():
+    time = _sample_blockwise_train_time(
+        4, 17, 8, torch.device("cpu"),
+        torch.Generator().manual_seed(3), counterfactual_group_size=2,
+    )
+    torch.testing.assert_close(time[:, 0], torch.zeros(4))
+    torch.testing.assert_close(time[:, 1:], torch.ones(4, 16))
+    clean = torch.zeros(2, 17, 2, 2, 2)
+    clean[1, 1:] = 1
+
+    class CaptureNoisyInput(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.cfg = SimpleNamespace(context_frames=17, block_frames=8)
+            self.core = SimpleNamespace(kv_caches=None)
+
+        def forward(self, noisy, _time, _conditions):
+            self.noisy = noisy.detach().clone()
+            return torch.zeros_like(noisy)
+
+    capture = CaptureNoisyInput()
+    renderer_flow_loss(
+        capture, clean, {}, counterfactual_group_size=2,
+        generator=torch.Generator().manual_seed(11),
+    )
+    torch.testing.assert_close(capture.noisy[0, 1:], capture.noisy[1, 1:])
+
+    mask = torch.ones(2, 17, 1, 4, 4, dtype=torch.bool)
+    ignored_reference = torch.zeros_like(clean)
+    assert renderer_counterfactual_player_loss(
+        ignored_reference, clean, mask, 2
+    ) > 0
+    assert renderer_counterfactual_player_loss(clean, clean, mask, 2) == 0
+
+
+def test_counterfactual_dataset_canonicalizes_voxels_but_keeps_references():
+    class Base:
+        def _read_target(self, episode, start, target):
+            return {"conditions": {
+                "voxel_classes": torch.full((2,), episode),
+                "voxel_known": torch.ones(2, dtype=torch.bool),
+                "camera_direction": torch.zeros(2, 2, 3),
+                "player_reference": torch.full((2, 4, 4, 2, 2), float(episode)),
+            }}
+
+    dataset = AppearanceCounterfactualRendererDataset.__new__(
+        AppearanceCounterfactualRendererDataset
+    )
+    dataset.base = Base()
+    dataset.index = [((0, 0, 0), (1, 0, 0))]
+    samples = dataset[0]
+    torch.testing.assert_close(
+        samples[0]["conditions"]["voxel_classes"],
+        samples[1]["conditions"]["voxel_classes"],
+    )
+    assert not torch.equal(
+        samples[0]["conditions"]["player_reference"],
+        samples[1]["conditions"]["player_reference"],
+    )
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA rasterization check")
 def test_gpu_voxel_projection_backward():

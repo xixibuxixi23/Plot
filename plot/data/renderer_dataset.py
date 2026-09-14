@@ -371,8 +371,30 @@ class TextAgentRendererDataset(Dataset):
             "player_reference": np.stack(references),
             "condition_mask": np.arange(t) == 0, "action_prefix_mask": np.arange(t) == 0,
         }
-        pixel_region_mask = (masks != 0)[:, None]
-        player_region_mask = player_masks[:, None]
+        # Raw collections retain source-resolution uint16 masks while RGB can
+        # be decoded at the configured training resolution. Resize IDs/masks
+        # with nearest-neighbor sampling so pixel losses and prefix masking
+        # always align with the RGB tensor without inventing mixed IDs.
+        if tuple(masks.shape[-2:]) != tuple(self.image_size):
+            pixel_region = np.stack([
+                cv2.resize((mask != 0).astype(np.uint8), self.image_size[::-1],
+                           interpolation=cv2.INTER_NEAREST).astype(bool)
+                for mask in masks
+            ])
+            player_region = np.stack([
+                cv2.resize(mask.astype(np.uint8), self.image_size[::-1],
+                           interpolation=cv2.INTER_NEAREST).astype(bool)
+                for mask in player_masks
+            ])
+            identity_player_mask = cv2.resize(
+                identity_player_mask.astype(np.uint8), self.image_size[::-1],
+                interpolation=cv2.INTER_NEAREST,
+            ).astype(bool)
+        else:
+            pixel_region = masks != 0
+            player_region = player_masks
+        pixel_region_mask = pixel_region[:, None]
+        player_region_mask = player_region[:, None]
         return {"rgb": torch.from_numpy(rgb),
                 "region_weight": torch.from_numpy(
                     1 + self.entity_region_upweight * weights[:, None]
