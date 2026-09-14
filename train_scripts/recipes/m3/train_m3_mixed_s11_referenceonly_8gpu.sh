@@ -12,7 +12,8 @@ RESUME_CHECKPOINT="${RESUME_CHECKPOINT:-${PLOT_ROOT}/outputs/m3_mixed_mild_refer
 OUTPUT_DIR="${OUTPUT_DIR:-${PLOT_ROOT}/outputs/m3_mixed_s11_referenceonly_formal_27000_37000_20260914}"
 INDEX_PATH="${INDEX_PATH:-${PLOT_ROOT}/derived/s11/mixed_train_v2_complete_g100_c65.pt}"
 EXPECTED_EPISODES="${EXPECTED_EPISODES:-400}"
-EXPECTED_SHARDS="${EXPECTED_SHARDS:-5}"
+EXPECTED_SHARDS="${EXPECTED_SHARDS:-160}"
+COLLECTION_LOG_DIR="${COLLECTION_LOG_DIR:-${S11_ROOT}/cluster_logs/train_5x32}"
 CUDA_DEVICES="${CUDA_DEVICES:-0,1,2,3,4,5,6,7}"
 S11_STEP_PROBABILITY="${S11_STEP_PROBABILITY:-0.05}"
 FINAL_STEP="${FINAL_STEP:-37000}"
@@ -32,8 +33,8 @@ while true; do
   failed_shards=0
   for ((shard = 0; shard < EXPECTED_SHARDS; shard++)); do
     shard_name="$(printf '%03d' "${shard}")"
-    pid_file="${S11_ROOT}/cluster_logs/train_v2/shard_${shard_name}.pid"
-    exit_file="${S11_ROOT}/cluster_logs/train_v2/shard_${shard_name}.exit"
+    pid_file="${COLLECTION_LOG_DIR}/shard_${shard_name}.pid"
+    exit_file="${COLLECTION_LOG_DIR}/shard_${shard_name}.exit"
     if [[ -s "${pid_file}" ]] && kill -0 "$(<"${pid_file}")" 2>/dev/null; then
       # A stale exit marker may remain from an earlier failed launch.  The PID
       # file is written by the current worker, so a live PID takes precedence.
