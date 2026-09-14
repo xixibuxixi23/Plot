@@ -6,17 +6,22 @@ starts, resumes, stops, changes its selected checkpoint, or completes.
 
 ## Active runs
 
-No active M1 or M3 training process was found at the 2026-09-13 UTC audit on the
-shared cluster or historical H100 host. The assigned next-run hosts are
-`zhizhou-avgen-2` (M1) and `js-public` (M3); hardware inspection reports eight
-H200 GPUs on each host. A detached worktree prepared for a possible resume is
-not an active run.
+| Model | Run ID | Code | Machine | Start/target step | Per-GPU batch | Effective batch | Status | Tracking |
+|---|---|---|---|---:|---:|---:|---|---|
+| M3 | `m3_h200_2node_identity_canary_b2_from26000_to26500_20260914` | `4a18d3b` | `zhizhou-avgen-2` + `js-public`, 16x H200 | 26,000 / 26,500 | 2 source windows | 32 source windows / 64 target views | active; 16-rank smoke passed and step-26,100 checkpoint saved | W&B offline run `izglgrr0`; shared output directory contains the run manifest and node logs |
+
+M1 is assigned to the independent eight-H100 host and is not active yet. Its
+detached run worktree is fixed at `4a18d3b`; the exact legacy S01 cache and the
+selected step-1,476,000 checkpoint are being staged and checksummed before the
+batch-64/32 smoke test. The cache contains 46,200 samples and cannot be rebuilt
+identically from the balanced compact release, whose S01 training subset is
+smaller and whose current Git checkout lacks the historical S01 index assets.
 
 ## Stopped, resumable runs
 
 | Model | Run ID | Code | Machine | Last train step | Resume checkpoint | Original target | Status | Tracking |
 |---|---|---|---|---:|---:|---:|---|---|
-| M1 | `m1_flow_2nodes_b32_eval10k_v2` | legacy source hashes; compatible PLOT migration at `4b6ce14` | historical shared H200 run; next host `zhizhou-avgen-2` | 1,476,560 | 1,476,000 | 2,000,000 | `stopped_by_user` at 2026-09-13 21:37 UTC; selected checkpoint staged and SHA-256 verified | local logs |
+| M1 | `m1_flow_2nodes_b32_eval10k_v2` | legacy source hashes; compatible PLOT migration at `4b6ce14` | historical shared H200 run; next host independent `H100-02` | 1,476,560 | 1,476,000 | 2,000,000 | `stopped_by_user` at 2026-09-13 21:37 UTC; selected checkpoint is being staged to H100 | local logs |
 | M3 | `m3_h100_8gpu_entity_reference_stage1_from25000_to27000_20260914` | launch provenance reconstructed as `60c83b9`; no launch manifest was saved | historical 8-GPU H100 run; next host `js-public` | 26,000 | 26,000 | 27,000 | selected checkpoint staged, SHA-256 verified, and strict-loaded on target | [W&B run](https://wandb.ai/ckx23-tsinghua-university/plot-m3/runs/7kbesehq) |
 
 The M1 code predates the clean PLOT Git history. Its distributed preflight log
