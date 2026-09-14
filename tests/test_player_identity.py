@@ -8,6 +8,7 @@ from plot.models.player_identity import (
 )
 from train_scripts.train_renderer import build_flow_region_weight
 from plot.training.renderer_trainer import renderer_player_identity_loss
+from scripts.audit_m3_reference_condition import _identity_metrics
 
 
 def test_masked_player_crop_preserves_gradient_and_alpha():
@@ -107,3 +108,29 @@ def test_renderer_identity_loss_uses_correct_reference_and_backpropagates():
     assert result["player_identity_ranking_accuracy"] == 1
     result["player_identity_loss"].backward()
     assert prediction.grad[:, 1].abs().sum() > 0
+
+
+def test_reference_audit_identity_metric_maps_future_frame_index():
+    prediction = torch.zeros(3, 3, 8, 8)
+    prediction[1, 0] = 1
+    prediction[2, 1] = 1
+    references = torch.zeros(2, 4, 4, 8, 8)
+    references[0, :, 0] = 1
+    references[0, :, 3] = 1
+    references[1, :, 1] = 1
+    references[1, :, 3] = 1
+    raw = {
+        "player_identity_valid": torch.tensor(True),
+        # Original clip frame 2 is prediction index 1 after dropping frame 0.
+        "player_identity_frame": torch.tensor(2),
+        "player_identity_slot": torch.tensor(0),
+        "player_identity_mask": torch.ones(1, 8, 8),
+        "conditions": {
+            "player_reference": references,
+            "player_appearance_valid": torch.ones(2, 4, dtype=torch.bool),
+        },
+    }
+    result = _identity_metrics(_ColorIdentity(), prediction, raw)
+    assert result["identity_similarity"] > 0.99
+    assert result["identity_wrong_similarity"] < 0.01
+    assert result["identity_ranking_correct"] is True

@@ -13,6 +13,7 @@ import torch
 from safetensors.torch import load_file
 
 from plot.data.renderer_dataset import TextAgentRendererDataset, collate_renderer
+from plot.models.player_identity import PlayerIdentityEncoder, crop_masked_players
 from plot.models.renderer import Renderer, RendererArgs
 from plot.models.renderer_codec import RendererCodec
 from plot.training.renderer_monitoring import RendererProbe, write_comparison_video
@@ -58,6 +59,60 @@ def _masked_mean(value, mask):
     return float((value * mask).sum() / (mask.sum().clamp_min(1) * value.shape[1]))
 
 
+def _load_identity_encoder(path, device):
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    encoder = PlayerIdentityEncoder(int(payload.get("embedding_dim", 128))).to(device).eval()
+    encoder.crop_size = tuple(payload.get("crop_size", (128, 64)))
+    encoder.load_state_dict(payload["model"], strict=True)
+    return encoder
+
+
+@torch.no_grad()
+def _identity_metrics(identity_encoder, prediction, raw):
+    """Score a future-only rollout against the selected resident reference."""
+    if not bool(raw["player_identity_valid"]):
+        return None
+    # Dataset indices address the original 65-frame clip, while ``prediction``
+    # contains only frames 1..64.
+    frame = int(raw["player_identity_frame"])
+    prediction_frame = frame - 1
+    if not 0 <= prediction_frame < len(prediction):
+        raise ValueError("player identity frame is outside the predicted future")
+    slot = int(raw["player_identity_slot"])
+    mask = raw["player_identity_mask"].to(prediction.device)[None].float()
+    crop, crop_valid = crop_masked_players(
+        prediction[prediction_frame : prediction_frame + 1],
+        mask,
+        output_size=identity_encoder.crop_size,
+    )
+    if not bool(crop_valid[0]):
+        return None
+    references = raw["conditions"]["player_reference"].to(prediction.device)
+    crop_embedding = identity_encoder.encode_crop(crop)
+    reference_embedding = identity_encoder.encode_reference(references[slot : slot + 1])
+    similarity = (crop_embedding * reference_embedding).sum(-1)[0]
+    result = {"identity_similarity": float(similarity)}
+
+    appearance_valid = raw["conditions"].get("player_appearance_valid")
+    if appearance_valid is not None:
+        candidate_valid = appearance_valid.bool().any(-1)
+        candidates = torch.where(
+            candidate_valid
+            & (torch.arange(len(candidate_valid), device=candidate_valid.device) != slot)
+        )[0]
+        if len(candidates):
+            wrong_slot = int(candidates[0])
+            wrong_embedding = identity_encoder.encode_reference(
+                references[wrong_slot : wrong_slot + 1]
+            )
+            wrong_similarity = (crop_embedding * wrong_embedding).sum(-1)[0]
+            result.update({
+                "identity_wrong_similarity": float(wrong_similarity),
+                "identity_ranking_correct": bool(similarity > wrong_similarity),
+            })
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", required=True)
@@ -69,6 +124,10 @@ def main():
         default=("construction", "four_player", "three_resident_combat"),
     )
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument(
+        "--identity-checkpoint",
+        help="frozen player identity encoder (defaults to the training config)",
+    )
     args = parser.parse_args()
     checkpoint_path = Path(args.checkpoint)
     config_path = Path(args.config) if args.config else checkpoint_path.parent / "config.json"
@@ -81,13 +140,23 @@ def main():
     model = Renderer(RendererArgs(**renderer_config)).to(device).eval()
     model.load_state_dict(_weights(checkpoint_path), strict=True)
     codec = RendererCodec(_weights(config["training"]["pixel_vae"])).to(device).eval()
+    identity_path = args.identity_checkpoint or config["training"].get(
+        "player_identity_checkpoint"
+    )
+    identity_encoder = (
+        _load_identity_encoder(identity_path, device) if identity_path else None
+    )
     vocabulary = config["training"]["vocabulary"]
     probe_path = checkpoint_path.parent / "visualizations" / "probes.json"
     probes = [RendererProbe(**row) for row in json.loads(probe_path.read_text())]
     probes = [probe for probe in probes if probe.name in set(args.probes)]
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    report = {"checkpoint": str(checkpoint_path), "probes": {}}
+    report = {
+        "checkpoint": str(checkpoint_path),
+        "identity_checkpoint": str(identity_path) if identity_path else None,
+        "probes": {},
+    }
 
     for probe_number, probe in enumerate(probes):
         raw = TextAgentRendererDataset.read_window(
@@ -136,6 +205,11 @@ def main():
                 f"{name}_conditioning_delta_player": _masked_mean(delta, player_mask),
                 f"{name}_conditioning_delta_outside": _masked_mean(delta, outside),
             })
+        if identity_encoder is not None:
+            for name, prediction in variants.items():
+                metrics = _identity_metrics(identity_encoder, prediction, raw)
+                if metrics is not None:
+                    row.update({f"{name}_{key}": value for key, value in metrics.items()})
         report["probes"][probe.name] = row
         (output / "reference_condition_audit.json").write_text(
             json.dumps(report, indent=2)
