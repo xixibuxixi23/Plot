@@ -1393,7 +1393,21 @@ class FrameDepthStackPixelDiT(nn.Module):
         # Convert to tensor for torch.compile compatibility (avoids dynamo guards on int values)
         global_start_idx_t = torch.tensor(global_start_idx, device=x.device)
         kv_candidates = []
+        unified_reference_injection_block = max(self.depth - 4, 0)
         for i, block in enumerate(self.blocks):
+            # One late-stage injection gives the last spatial blocks enough
+            # capacity to integrate identity detail without repeatedly
+            # branching the backbone or carrying it through the entire DiT.
+            if (
+                self.unified_reference_adapter is not None
+                and i == unified_reference_injection_block
+            ):
+                x = x + self.unified_reference_adapter(
+                    x,
+                    unified_reference,
+                    unified_reference_roi,
+                    unified_reference_valid,
+                )
             if self.condition_reinjectors is not None:
                 x = x + self.condition_reinjectors[i](condition_tokens)
             if self.appearance_reinjectors is not None:
@@ -1474,15 +1488,6 @@ class FrameDepthStackPixelDiT(nn.Module):
             if block_callback is not None:
                 block_callback(i, x)
 
-        # A single late injection keeps identity detail close to the pixel
-        # prediction instead of asking the full DiT stack to preserve it.
-        if self.unified_reference_adapter is not None:
-            x = x + self.unified_reference_adapter(
-                x,
-                unified_reference,
-                unified_reference_roi,
-                unified_reference_valid,
-            )
         features = x
         x = self.final_layer(x, c)  # (N, T, H, W, patch_size ** 2 * out_channels)
         # unpatchify

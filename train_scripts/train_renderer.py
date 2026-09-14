@@ -119,8 +119,16 @@ def main():
         "--unified-player-reference",
         action="store_true",
         help=(
-            "Use one input-level all-view player reference adapter; replaces pooled, "
+            "Use one late-stage all-view player reference adapter; replaces pooled, "
             "view-warped and per-block reference appearance paths"
+        ),
+    )
+    parser.add_argument(
+        "--reset-unified-reference-adapter",
+        action="store_true",
+        help=(
+            "With --warm-start, retain the reference encoder but initialize the "
+            "unified adapter for a changed injection location"
         ),
     )
     parser.add_argument(
@@ -259,6 +267,12 @@ def main():
     ):
         parser.error(
             "--unified-player-reference replaces all legacy appearance/reference flags"
+        )
+    if args.reset_unified_reference_adapter and not (
+        args.unified_player_reference and args.warm_start
+    ):
+        parser.error(
+            "--reset-unified-reference-adapter requires unified reference warm-starting"
         )
     if args.appearance_unfreeze_last_spatial_blocks and not args.freeze_base_for_appearance:
         parser.error(
@@ -480,7 +494,7 @@ def main():
             old_prefix = "core.entity_reference_adapters.0."
             new_prefix = "core.unified_reference_adapter."
             for key, value in list(warm_state.items()):
-                if key.startswith(old_prefix):
+                if key.startswith(old_prefix) and not args.reset_unified_reference_adapter:
                     new_key = new_prefix + key[len(old_prefix):]
                     warm_state[new_key] = value
                     migrated_parameters.append(f"{key}->{new_key}")
@@ -499,6 +513,11 @@ def main():
                 key: value for key, value in warm_state.items()
                 if not key.startswith(legacy_prefixes)
             }
+            if args.reset_unified_reference_adapter:
+                warm_state = {
+                    key: value for key, value in warm_state.items()
+                    if not key.startswith(new_prefix)
+                }
         incompatible = raw_model.load_state_dict(warm_state, strict=False)
         allowed_missing = (
             "core.hud_condition_embedder.",
