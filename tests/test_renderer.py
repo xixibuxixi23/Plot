@@ -593,7 +593,13 @@ def test_counterfactual_dataset_canonicalizes_voxels_but_keeps_references():
             return {"conditions": {
                 "voxel_classes": torch.full((2,), episode),
                 "voxel_known": torch.ones(2, dtype=torch.bool),
-                "camera_direction": torch.zeros(2, 2, 3),
+                "player_position": torch.tensor([
+                    [[0., 0., 0.], [1., 2., 3.]],
+                    [[0., 1., 0.], [1., 3., 3.]],
+                ]) + torch.tensor([float(episode), -2. * episode, 3. * episode]),
+                "player_valid": torch.ones(2, 2, dtype=torch.bool),
+                "camera_direction": torch.zeros(2, 2, 3) + episode * 1e-7,
+                "raster_camera": torch.zeros(2, 10) + episode * 1e-7,
                 "player_reference": torch.full((2, 4, 4, 2, 2), float(episode)),
             }}
 
@@ -607,10 +613,41 @@ def test_counterfactual_dataset_canonicalizes_voxels_but_keeps_references():
         samples[0]["conditions"]["voxel_classes"],
         samples[1]["conditions"]["voxel_classes"],
     )
+    torch.testing.assert_close(
+        samples[0]["conditions"]["player_position"],
+        samples[1]["conditions"]["player_position"],
+    )
+    torch.testing.assert_close(
+        samples[0]["conditions"]["raster_camera"],
+        samples[1]["conditions"]["raster_camera"],
+    )
     assert not torch.equal(
         samples[0]["conditions"]["player_reference"],
         samples[1]["conditions"]["player_reference"],
     )
+
+
+def test_counterfactual_dataset_rejects_relative_geometry_changes():
+    class Base:
+        def _read_target(self, episode, start, target):
+            position = torch.tensor([[[0., 0., 0.], [1., 2., 3.]]])
+            if episode:
+                position[:, 1, 0] += 1
+            return {"conditions": {
+                "voxel_classes": torch.zeros(2, dtype=torch.long),
+                "voxel_known": torch.ones(2, dtype=torch.bool),
+                "player_position": position,
+                "player_valid": torch.ones(1, 2, dtype=torch.bool),
+                "player_reference": torch.full((2, 4, 4, 2, 2), float(episode)),
+            }}
+
+    dataset = AppearanceCounterfactualRendererDataset.__new__(
+        AppearanceCounterfactualRendererDataset
+    )
+    dataset.base = Base()
+    dataset.index = [((0, 0, 0), (1, 0, 0))]
+    with pytest.raises(ValueError, match="relative player geometry"):
+        dataset[0]
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA rasterization check")
 def test_gpu_voxel_projection_backward():

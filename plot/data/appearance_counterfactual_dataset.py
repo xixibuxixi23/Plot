@@ -61,19 +61,44 @@ class AppearanceCounterfactualRendererDataset(Dataset):
         reference = samples[0]["conditions"]
 
         # Each variant is captured by a fresh game-server process. Minetest's
-        # numeric content IDs can shift even though S11's named blocks and all
-        # geometry are unchanged. A counterfactual batch must differ only in
-        # appearance, so use variant 0's already-encoded voxel condition for
-        # every sibling. Keep the raw recordings untouched for auditability.
+        # numeric content IDs and the arena's absolute origin can shift even
+        # though S11's named blocks and relative geometry are unchanged. Small
+        # floating-point differences also arise while exporting the otherwise
+        # identical camera. A counterfactual batch must differ only in
+        # appearance, so verify translation-invariant geometry and then use
+        # variant 0's canonical non-appearance conditions for every sibling.
+        # Keep the raw recordings untouched for auditability.
         for sample in samples[1:]:
             conditions = sample["conditions"]
+            position_delta = conditions["player_position"] - reference["player_position"]
+            valid = conditions["player_valid"] & reference["player_valid"]
+            translations = position_delta[valid]
+            if not len(translations) or not torch.allclose(
+                translations,
+                translations[:1].expand_as(translations),
+                atol=1e-5,
+                rtol=1e-5,
+            ):
+                raise ValueError(
+                    "S11 counterfactual group changed relative player geometry"
+                )
             for name, value in reference.items():
-                if name in {"voxel_classes", "voxel_known", "player_skin", "player_reference"}:
+                if name in {"voxel_classes", "voxel_known", "player_skin", "player_reference",
+                            "player_position"}:
                     continue
-                if isinstance(value, torch.Tensor) and not torch.equal(value, conditions[name]):
+                candidate = conditions[name]
+                if not isinstance(value, torch.Tensor):
+                    continue
+                matches = (
+                    torch.allclose(value, candidate, atol=1e-5, rtol=1e-5)
+                    if value.is_floating_point()
+                    else torch.equal(value, candidate)
+                )
+                if not matches:
                     raise ValueError(
                         f"S11 counterfactual group changed non-appearance condition {name!r}"
                     )
-            conditions["voxel_classes"] = reference["voxel_classes"]
-            conditions["voxel_known"] = reference["voxel_known"]
+            for name, value in reference.items():
+                if name not in {"player_skin", "player_reference"}:
+                    conditions[name] = value
         return samples
