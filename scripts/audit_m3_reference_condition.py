@@ -142,6 +142,14 @@ def main():
     )
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument(
+        "--normal-only", action="store_true",
+        help="Run only the ordinary rollout and label it as generated output.",
+    )
+    parser.add_argument(
+        "--probe-manifest",
+        help="Optional probe JSON path; defaults to the checkpoint visualization manifest.",
+    )
+    parser.add_argument(
         "--mask-prefix-players",
         action="store_true",
         help=(
@@ -172,7 +180,10 @@ def main():
         _load_identity_encoder(identity_path, device) if identity_path else None
     )
     vocabulary = config["training"]["vocabulary"]
-    probe_path = checkpoint_path.parent / "visualizations" / "probes.json"
+    probe_path = (
+        Path(args.probe_manifest) if args.probe_manifest
+        else checkpoint_path.parent / "visualizations" / "probes.json"
+    )
     probes = [RendererProbe(**row) for row in json.loads(probe_path.read_text())]
     probes = [probe for probe in probes if probe.name in set(args.probes)]
     output = Path(args.output_dir)
@@ -181,6 +192,7 @@ def main():
         "checkpoint": str(checkpoint_path),
         "identity_checkpoint": str(identity_path) if identity_path else None,
         "mask_prefix_players": args.mask_prefix_players,
+        "normal_only": args.normal_only,
         "probes": {},
     }
 
@@ -193,7 +205,8 @@ def main():
             context_frames=65,
         )
         variants = {}
-        for name in ("correct", "shuffled", "zero"):
+        variant_names = ("generated",) if args.normal_only else ("correct", "shuffled", "zero")
+        for name in variant_names:
             sample = collate_renderer([raw])
             if name == "shuffled":
                 sample["conditions"]["player_reference"] = sample["conditions"][
@@ -210,22 +223,26 @@ def main():
                 mask_prefix_players=args.mask_prefix_players,
             )
             variants[name] = prediction.float()
+            output_name = "gt_vs_generated" if args.normal_only else name
             write_comparison_video(
-                output / f"{probe.name}_{name}.mp4",
+                output / f"{probe.name}_{output_name}.mp4",
                 truth,
                 prediction,
                 sample["region_weight"][0, 1:65],
             )
         player_mask = raw["player_region_mask"][1:65].to(device).float()
         outside = 1 - player_mask
-        correct_error = (variants["correct"] - truth.float()).abs()
+        primary_name = "generated" if args.normal_only else "correct"
+        primary_error = (variants[primary_name] - truth.float()).abs()
         row = {
             "player_pixels": float(player_mask.sum()),
-            "correct_player_l1": _masked_mean(correct_error, player_mask),
-            "correct_global_l1": float(correct_error.mean()),
+            f"{primary_name}_player_l1": _masked_mean(primary_error, player_mask),
+            f"{primary_name}_global_l1": float(primary_error.mean()),
         }
         for name in ("shuffled", "zero"):
-            delta = (variants[name] - variants["correct"]).abs()
+            if name not in variants:
+                continue
+            delta = (variants[name] - variants[primary_name]).abs()
             error = (variants[name] - truth.float()).abs()
             row.update({
                 f"{name}_player_l1": _masked_mean(error, player_mask),
