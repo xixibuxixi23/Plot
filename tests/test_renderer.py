@@ -286,9 +286,23 @@ def test_unified_player_reference_is_the_only_appearance_route_and_uses_all_view
 
     high_detail = Renderer(replace(
         base.cfg, unified_player_reference=True, player_reference_grid_size=(16, 8),
+        player_reference_position_encoding=True,
     )).eval()
     high_detail_tokens = high_detail.encode_conditions(cond)["unified_reference_tokens"]
     assert high_detail_tokens.shape == (1, 2, 4, 128, 256)
+    plain_high_detail = Renderer(replace(
+        high_detail.cfg, player_reference_position_encoding=False,
+    )).eval()
+    plain_high_detail.load_state_dict(high_detail.state_dict(), strict=True)
+    plain_tokens = plain_high_detail.encode_conditions(cond)["unified_reference_tokens"]
+    expected_position = high_detail.reference_encoder.position_embedding
+    torch.testing.assert_close(
+        high_detail_tokens[0, 0, 0] - plain_tokens[0, 0, 0],
+        expected_position,
+    )
+    assert expected_position.shape == (128, 256)
+    assert not torch.allclose(expected_position[0], expected_position[-1])
+    assert "reference_encoder.position_embedding" not in high_detail.state_dict()
     assert "entity_reference_view_weights" not in encoded
     assert "appearance_spatial_condition" not in encoded
 

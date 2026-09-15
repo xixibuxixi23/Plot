@@ -42,6 +42,7 @@ class RendererArgs:
     entity_reference_attention: bool = False
     unified_player_reference: bool = False
     player_reference_grid_size: tuple[int, int] = (8, 4)
+    player_reference_position_encoding: bool = False
     unified_reference_reinject_blocks: tuple[int, ...] = ()
 
 
@@ -146,7 +147,11 @@ class Renderer(nn.Module):
         )
         use_reference_tokens = cfg.entity_reference_attention or cfg.unified_player_reference
         self.reference_encoder = (
-            PlayerReferenceEncoder(256, grid_size=cfg.player_reference_grid_size)
+            PlayerReferenceEncoder(
+                256,
+                grid_size=cfg.player_reference_grid_size,
+                position_encoding=cfg.player_reference_position_encoding,
+            )
             if use_reference_tokens
             else None
         )

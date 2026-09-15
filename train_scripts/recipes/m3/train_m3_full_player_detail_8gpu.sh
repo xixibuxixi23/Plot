@@ -59,6 +59,7 @@ exec "${PLOT_ROOT}/.venv/bin/python" -m torch.distributed.run \
   "${checkpoint_args[@]}" --output-dir "${OUTPUT_DIR}" \
   --unified-player-reference "${reinjection_args[@]}" \
   --player-reference-token-grid 16 8 \
+  --player-reference-position-encoding \
   --counterfactual-random-timesteps \
   --context-frames 65 --cache-frames 64 --block-frames 8 \
   --target-views-per-window 1 --batch-size 1 --workers 1 \

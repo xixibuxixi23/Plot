@@ -200,6 +200,11 @@ def main():
         help="Spatial token grid retained from each native 256x128 RGBA player view",
     )
     parser.add_argument(
+        "--player-reference-position-encoding",
+        action="store_true",
+        help="Add fixed 2D source coordinates to each per-view appearance token",
+    )
+    parser.add_argument(
         "--freeze-base-for-appearance",
         action="store_true",
         help="Stage-one training: update only the new dense appearance modules",
@@ -548,6 +553,7 @@ def main():
         entity_reference_attention=args.entity_reference_attention,
         unified_player_reference=args.unified_player_reference,
         player_reference_grid_size=tuple(args.player_reference_token_grid),
+        player_reference_position_encoding=args.player_reference_position_encoding,
         unified_reference_reinject_blocks=tuple(
             args.unified_reference_reinject_blocks
         ),

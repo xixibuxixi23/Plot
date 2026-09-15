@@ -354,9 +354,11 @@ class PlayerReferenceLayout(nn.Module):
 class PlayerReferenceEncoder(nn.Module):
     """Encode native RGBA views into spatial tokens without square resizing."""
 
-    def __init__(self, output_dim=256, grid_size=(8, 4)):
+    def __init__(self, output_dim=256, grid_size=(8, 4), position_encoding=False):
         super().__init__()
         self.output_dim, self.grid_size = int(output_dim), tuple(grid_size)
+        if position_encoding and self.output_dim % 4:
+            raise ValueError("2D reference position encoding requires output_dim divisible by 4")
         self.encoder = nn.Sequential(
             nn.Conv2d(4, 32, 3, 2, 1), nn.SiLU(),
             nn.Conv2d(32, 64, 3, 2, 1), nn.SiLU(),
@@ -365,6 +367,25 @@ class PlayerReferenceEncoder(nn.Module):
             nn.AdaptiveAvgPool2d(self.grid_size),
         )
         self.view_embedding = nn.Parameter(torch.randn(4, output_dim) * .02)
+        position = self._make_2d_position_embedding(*self.grid_size, self.output_dim)
+        self.register_buffer(
+            "position_embedding",
+            position if position_encoding else None,
+            persistent=False,
+        )
+
+    @staticmethod
+    def _make_2d_position_embedding(height, width, dim):
+        y, x = torch.meshgrid(
+            torch.arange(height, dtype=torch.float32),
+            torch.arange(width, dtype=torch.float32),
+            indexing="ij",
+        )
+        frequencies = torch.arange(dim // 4, dtype=torch.float32)
+        frequencies = 1 / (10000 ** (frequencies / max(dim // 4, 1)))
+        x = x.flatten()[:, None] * frequencies[None]
+        y = y.flatten()[:, None] * frequencies[None]
+        return torch.cat((x.sin(), x.cos(), y.sin(), y.cos()), dim=-1)
 
     def forward(self, reference, valid=None):
         if reference.ndim != 6 or reference.shape[2:4] != (4, 4):
@@ -373,6 +394,8 @@ class PlayerReferenceEncoder(nn.Module):
         encoded = self.encoder(reference.flatten(0, 2))
         encoded = encoded.flatten(2).transpose(1, 2).unflatten(0, (bsz, agents, views))
         encoded = encoded + self.view_embedding[None,None,:,None].to(encoded.dtype)
+        if self.position_embedding is not None:
+            encoded = encoded + self.position_embedding[None, None, None].to(encoded.dtype)
         if valid is not None:
             encoded *= valid.to(encoded.dtype)[...,None,None]
         return encoded
