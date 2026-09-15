@@ -205,6 +205,14 @@ def main():
         help="Add fixed 2D source coordinates to each per-view appearance token",
     )
     parser.add_argument(
+        "--geometry-aware-player-reference",
+        action="store_true",
+        help=(
+            "Bias unified reference attention by camera-facing view and matching "
+            "source/target local player coordinates"
+        ),
+    )
+    parser.add_argument(
         "--freeze-base-for-appearance",
         action="store_true",
         help="Stage-one training: update only the new dense appearance modules",
@@ -355,6 +363,10 @@ def main():
     if args.unified_reference_reinject_blocks and not args.unified_player_reference:
         parser.error(
             "--unified-reference-reinject-blocks requires --unified-player-reference"
+        )
+    if args.geometry_aware_player_reference and not args.unified_player_reference:
+        parser.error(
+            "--geometry-aware-player-reference requires --unified-player-reference"
         )
     if any(size < 1 for size in args.player_reference_token_grid):
         parser.error("--player-reference-token-grid dimensions must be positive")
@@ -554,6 +566,7 @@ def main():
         unified_player_reference=args.unified_player_reference,
         player_reference_grid_size=tuple(args.player_reference_token_grid),
         player_reference_position_encoding=args.player_reference_position_encoding,
+        geometry_aware_player_reference=args.geometry_aware_player_reference,
         unified_reference_reinject_blocks=tuple(
             args.unified_reference_reinject_blocks
         ),

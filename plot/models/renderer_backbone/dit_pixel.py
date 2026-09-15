@@ -444,6 +444,8 @@ class UnifiedPlayerReferenceAdapter(nn.Module):
         attention_dim=64,
         value_dim=256,
         reinjection_count=0,
+        reference_grid_size=(8, 4),
+        geometry_aware=False,
     ):
         super().__init__()
         self.x_norm = nn.LayerNorm(hidden_size)
@@ -453,10 +455,39 @@ class UnifiedPlayerReferenceAdapter(nn.Module):
         self.to_value = nn.Linear(reference_dim, value_dim)
         self.to_output = nn.Linear(value_dim, hidden_size)
         self.scale = attention_dim ** -.5
+        self.geometry_aware = bool(geometry_aware)
+        grid_height, grid_width = map(int, reference_grid_size)
+        if grid_height < 1 or grid_width < 1:
+            raise ValueError("reference grid dimensions must be positive")
+        reference_y, reference_x = torch.meshgrid(
+            torch.linspace(-1, 1, grid_height),
+            torch.linspace(-1, 1, grid_width),
+            indexing="ij",
+        )
+        self.register_buffer(
+            "reference_coordinates",
+            torch.stack((reference_x, reference_y), dim=-1).flatten(0, 1),
+            persistent=False,
+        )
+        if self.geometry_aware:
+            # softplus(1.85) is close to 2: a useful spatial prior without
+            # turning learned reference attention into hard texture sampling.
+            self.geometry_log_scale = nn.Parameter(torch.tensor(1.85))
+            # The layout's four-view distribution is deliberately softened:
+            # arbitrary camera angles may blend adjacent canonical views.
+            self.geometry_view_logit = nn.Parameter(torch.tensor(-1.10))
         if reinjection_count:
             self.reinjection_gates = nn.Parameter(torch.zeros(reinjection_count))
 
-    def forward(self, x, reference, roi, valid):
+    def forward(
+        self,
+        x,
+        reference,
+        roi,
+        valid,
+        view_weights=None,
+        local_coordinates=None,
+    ):
         # x [B,T,H,W,D], reference [B,A,V,N,R], roi [B,T,A,H,W]
         bsz, frames, height, width, _ = x.shape
         if reference.ndim != 5 or reference.shape[0] != bsz:
@@ -474,6 +505,37 @@ class UnifiedPlayerReferenceAdapter(nn.Module):
         routing = roi.flatten(3).permute(0, 1, 3, 2).clamp(0, 1)
         routing = routing * valid.any(-1)[:, None, None].to(routing.dtype)
         score = score + routing.clamp_min(1e-6).log()[..., None, None]
+        if self.geometry_aware:
+            if view_weights is None or local_coordinates is None:
+                raise ValueError(
+                    "geometry-aware reference requires view weights and local coordinates"
+                )
+            if view_weights.shape != (bsz, frames, agents, views):
+                raise ValueError(
+                    "unified reference view weights must be [B,T,A,V]"
+                )
+            expected_coordinates = (bsz, frames, agents, height, width, 2)
+            if local_coordinates.shape != expected_coordinates:
+                raise ValueError(
+                    "unified reference local coordinates must have shape "
+                    f"{expected_coordinates}"
+                )
+            target_coordinates = local_coordinates.flatten(3, 4).permute(0, 1, 3, 2, 4)
+            reference_coordinates = self.reference_coordinates.to(
+                device=x.device, dtype=x.dtype
+            )
+            if reference_coordinates.shape[0] != reference.shape[-2]:
+                raise ValueError("reference token count does not match configured grid")
+            squared_distance = (
+                target_coordinates[..., None, :] - reference_coordinates
+            ).square().sum(-1)
+            geometry_scale = F.softplus(self.geometry_log_scale).to(x.dtype)
+            score = score - geometry_scale * squared_distance[..., None, :]
+            view_prior_scale = self.geometry_view_logit.sigmoid().to(x.dtype)
+            view_log_prior = view_weights.to(x.dtype).clamp_min(1e-6).log()
+            score = score + view_prior_scale * view_log_prior[
+                :, :, None, :, :, None
+            ]
         score = score.masked_fill(~valid[:, None, None, :, :, None], -1e4)
         attention = score.flatten(3).softmax(-1).unflatten(3, score.shape[3:])
         output = torch.einsum("btsavn,bavnd->btsd", attention, value)
@@ -768,6 +830,8 @@ class FrameDepthStackPixelDitDenoiserArgs:
     detail_preserving_appearance : bool = False
     entity_reference_dim : int = 0
     unified_reference_dim : int = 0
+    unified_reference_grid_size : Tuple[int, int] = (8, 4)
+    geometry_aware_player_reference : bool = False
     unified_reference_reinject_blocks : Tuple[int, ...] = ()
     context_window_size : int = 16
     cache_window_size : int = 32
@@ -820,6 +884,8 @@ class FrameDepthStackPixelDiT(nn.Module):
             detail_preserving_appearance=False,
             entity_reference_dim=0,
             unified_reference_dim=0,
+            unified_reference_grid_size=(8, 4),
+            geometry_aware_player_reference=False,
             unified_reference_reinject_blocks=(),
             context_window_size=32,
             cache_window_size=32,
@@ -984,6 +1050,8 @@ class FrameDepthStackPixelDiT(nn.Module):
                 hidden_size,
                 unified_reference_dim,
                 reinjection_count=len(self.unified_reference_reinject_blocks),
+                reference_grid_size=unified_reference_grid_size,
+                geometry_aware=geometry_aware_player_reference,
             )
             if unified_reference_dim > 0
             else None
@@ -1348,6 +1416,8 @@ class FrameDepthStackPixelDiT(nn.Module):
         unified_reference = None
         unified_reference_roi = None
         unified_reference_valid = None
+        unified_reference_view_weights = None
+        unified_reference_local_coordinates = None
         if self.unified_reference_adapter is not None:
             reference = external_cond.get("unified_reference_tokens")
             roi = external_cond.get("unified_reference_roi")
@@ -1369,10 +1439,36 @@ class FrameDepthStackPixelDiT(nn.Module):
             )
             unified_reference = reference.to(x.dtype)
             unified_reference_valid = valid.bool()
+            if self.unified_reference_adapter.geometry_aware:
+                view_weights = external_cond.get("unified_reference_view_weights")
+                local_coordinates = external_cond.get(
+                    "unified_reference_local_coordinates"
+                )
+                if view_weights is None or local_coordinates is None:
+                    raise ValueError(
+                        "geometry-aware unified reference layout tensors are required"
+                    )
+                unified_reference_view_weights = view_weights.to(x.dtype)
+                local_coordinates = rearrange(
+                    local_coordinates,
+                    "b t a h w c -> (b t a) c h w",
+                ).to(x.dtype)
+                local_coordinates = F.avg_pool2d(
+                    local_coordinates, self.patch_size, self.patch_size
+                )
+                unified_reference_local_coordinates = rearrange(
+                    local_coordinates,
+                    "(b t a) c h w -> b t a h w c",
+                    b=B,
+                    t=T,
+                    a=reference.shape[1],
+                )
             if self.gradient_checkpointing and self.training:
                 reference_delta = checkpoint(
                     lambda x_, reference_, roi_, valid_: self.unified_reference_adapter(
-                        x_, reference_, roi_, valid_
+                        x_, reference_, roi_, valid_,
+                        unified_reference_view_weights,
+                        unified_reference_local_coordinates,
                     ),
                     x,
                     unified_reference,
@@ -1386,6 +1482,8 @@ class FrameDepthStackPixelDiT(nn.Module):
                     unified_reference,
                     unified_reference_roi,
                     unified_reference_valid,
+                    unified_reference_view_weights,
+                    unified_reference_local_coordinates,
                 )
             x = x + reference_delta
         # embed noise steps
@@ -1456,7 +1554,9 @@ class FrameDepthStackPixelDiT(nn.Module):
                 if self.gradient_checkpointing and self.training:
                     reference_delta = checkpoint(
                         lambda x_, reference_, roi_, valid_: adapter(
-                            x_, reference_, roi_, valid_
+                            x_, reference_, roi_, valid_,
+                            unified_reference_view_weights,
+                            unified_reference_local_coordinates,
                         ),
                         x,
                         unified_reference,
@@ -1470,6 +1570,8 @@ class FrameDepthStackPixelDiT(nn.Module):
                         unified_reference,
                         unified_reference_roi,
                         unified_reference_valid,
+                        unified_reference_view_weights,
+                        unified_reference_local_coordinates,
                     )
                 gate = adapter.reinjection_gates[reinjection_gate].tanh().to(x.dtype)
                 x = x + gate * reference_delta

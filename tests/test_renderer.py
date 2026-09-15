@@ -349,6 +349,50 @@ def test_unified_player_reference_is_the_only_appearance_route_and_uses_all_view
     assert grad is not None and grad.abs().sum() > 0
 
 
+def test_geometry_aware_unified_reference_uses_view_and_local_coordinates():
+    base = tiny_model()
+    plain = Renderer(replace(
+        base.cfg,
+        unified_player_reference=True,
+    )).eval()
+    plain.load_state_dict(base.state_dict(), strict=False)
+    with torch.no_grad():
+        plain.core.unified_reference_adapter.to_output.weight.normal_(std=.02)
+
+    geometry = Renderer(replace(
+        plain.cfg,
+        geometry_aware_player_reference=True,
+    )).eval()
+    incompatible = geometry.load_state_dict(plain.state_dict(), strict=False)
+    assert incompatible.unexpected_keys == []
+    assert incompatible.missing_keys == [
+        "core.unified_reference_adapter.geometry_log_scale",
+        "core.unified_reference_adapter.geometry_view_logit",
+    ]
+
+    cond = conditions(9)
+    cond["player_reference"] = torch.rand(1, 2, 4, 4, 32, 16)
+    encoded = geometry.encode_conditions(cond)
+    assert encoded["unified_reference_view_weights"].shape == (1, 9, 2, 4)
+    assert encoded["unified_reference_local_coordinates"].shape == (1, 9, 2, 4, 4, 2)
+    assert "core.unified_reference_adapter.reference_coordinates" not in geometry.state_dict()
+
+    x, time = torch.randn(1, 9, 16, 4, 4), torch.rand(1, 9)
+    with torch.no_grad():
+        plain_output = plain(x, time, cond)
+        geometry_output = geometry(x, time, cond)
+    assert not torch.allclose(plain_output, geometry_output)
+
+    geometry.train()
+    geometry.zero_grad(set_to_none=True)
+    geometry(x, time, cond).square().mean().backward()
+    adapter = geometry.core.unified_reference_adapter
+    scale_grad = adapter.geometry_log_scale.grad
+    view_grad = adapter.geometry_view_logit.grad
+    assert scale_grad is not None and scale_grad.abs().sum() > 0
+    assert view_grad is not None and view_grad.abs().sum() > 0
+
+
 def test_unified_reference_reinjection_is_shared_gated_and_exact_at_warm_start():
     base = tiny_model()
     single = Renderer(replace(base.cfg, unified_player_reference=True)).eval()

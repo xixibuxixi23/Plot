@@ -335,6 +335,19 @@ class PlayerReferenceLayout(nn.Module):
         dx = (grid_x.view(1,1,1,1,self.width) - center_u[...,None,None]).abs()
         roi = torch.sigmoid((box_h[...,None,None]/2-dy)*self.edge_sharpness)
         roi = roi * torch.sigmoid((box_w[...,None,None]/2-dx)*self.edge_sharpness)
+        local_y = (
+            grid_y.view(1, 1, 1, self.height, 1) - center_v[..., None, None]
+        ) / (box_h[..., None, None] / 2)
+        local_x = (
+            grid_x.view(1, 1, 1, 1, self.width) - center_u[..., None, None]
+        ) / (box_w[..., None, None] / 2)
+        local_coordinates = torch.stack(
+            (
+                local_x.expand(-1, -1, -1, self.height, -1),
+                local_y.expand(-1, -1, -1, -1, self.width),
+            ),
+            dim=-1,
+        ).clamp(-2, 2)
         visible = valid & target_valid[...,None] & (((foot_depth + head_depth) / 2) > .05)
         slots = torch.arange(agents, device=position.device)[None,None]
         visible &= slots != target[:,None,None]
@@ -348,7 +361,11 @@ class PlayerReferenceLayout(nn.Module):
         view_weights = torch.stack((front, -front, -right_score, right_score), -1)
         view_weights = (view_weights * self.view_sharpness).softmax(-1)
         view_weights *= visible[...,None].to(dtype)
-        return roi.contiguous(), view_weights.contiguous()
+        return (
+            roi.contiguous(),
+            view_weights.contiguous(),
+            local_coordinates.contiguous(),
+        )
 
 
 class PlayerReferenceEncoder(nn.Module):

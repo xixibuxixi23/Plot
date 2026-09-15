@@ -43,6 +43,7 @@ class RendererArgs:
     unified_player_reference: bool = False
     player_reference_grid_size: tuple[int, int] = (8, 4)
     player_reference_position_encoding: bool = False
+    geometry_aware_player_reference: bool = False
     unified_reference_reinject_blocks: tuple[int, ...] = ()
 
 
@@ -132,6 +133,10 @@ class Renderer(nn.Module):
             raise ValueError(
                 "unified player reference replaces all legacy appearance/reference paths"
             )
+        if cfg.geometry_aware_player_reference and not cfg.unified_player_reference:
+            raise ValueError(
+                "geometry-aware player reference requires unified player reference"
+            )
         if cfg.cache_frames < cfg.block_frames or cfg.context_frames < 1 + cfg.block_frames:
             raise ValueError("M3 requires room for one output block and its prefix")
         if (cfg.context_frames - 1) % cfg.block_frames:
@@ -177,6 +182,8 @@ class Renderer(nn.Module):
             detail_preserving_appearance=cfg.detail_preserving_appearance,
             entity_reference_dim=256 if cfg.entity_reference_attention else 0,
             unified_reference_dim=256 if cfg.unified_player_reference else 0,
+            unified_reference_grid_size=cfg.player_reference_grid_size,
+            geometry_aware_player_reference=cfg.geometry_aware_player_reference,
             unified_reference_reinject_blocks=cfg.unified_reference_reinject_blocks,
             gradient_checkpointing=cfg.gradient_checkpointing,
             aggregation_config={} if cfg.gpu_rasterizer else None)
@@ -211,10 +218,15 @@ class Renderer(nn.Module):
             reference_tokens = self.reference_encoder(
                 reference, cond.get("player_appearance_valid")
             )
-            roi, view_weights = self.reference_layout(spatial_cond, target)
+            roi, view_weights, local_coordinates = self.reference_layout(
+                spatial_cond, target
+            )
             if self.cfg.unified_player_reference:
                 result["unified_reference_tokens"] = reference_tokens
                 result["unified_reference_roi"] = roi
+                if self.cfg.geometry_aware_player_reference:
+                    result["unified_reference_view_weights"] = view_weights
+                    result["unified_reference_local_coordinates"] = local_coordinates
                 valid = cond.get("player_appearance_valid")
                 if valid is None:
                     valid = torch.ones(
