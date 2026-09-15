@@ -15,6 +15,9 @@ CUDA_DEVICES="${CUDA_DEVICES:-0,1,2,3,4,5,6,7}"
 FINAL_STEP="${FINAL_STEP:-39750}"
 S11_STEP_PROBABILITY="${S11_STEP_PROBABILITY:-0.20}"
 LEARNING_RATE="${LEARNING_RATE:-0.00002}"
+PLAYER_PIXEL_L1_WEIGHT="${PLAYER_PIXEL_L1_WEIGHT:-1}"
+PLAYER_PIXEL_EDGE_WEIGHT="${PLAYER_PIXEL_EDGE_WEIGHT:-0.5}"
+PIXEL_LOSS_FRAMES="${PIXEL_LOSS_FRAMES:-2}"
 REINJECT_BLOCKS="${REINJECT_BLOCKS-3 7 11}"
 
 CHECKPOINT_PATH="${RESUME:-${BASE_CHECKPOINT}}"
@@ -67,12 +70,13 @@ exec "${PLOT_ROOT}/.venv/bin/python" -m torch.distributed.run \
   --visualize-every 0 --log-every 10 --precision bf16 --gradient-accumulation 1 \
   --latent-player-region-upweight 8 --player-mask-probability 0.5 \
   --counterfactual-player-mask-probability 1 \
-  --player-pixel-l1-weight 1 --player-pixel-edge-weight 0.5 \
+  --player-pixel-l1-weight "${PLAYER_PIXEL_L1_WEIGHT}" \
+  --player-pixel-edge-weight "${PLAYER_PIXEL_EDGE_WEIGHT}" \
   --entity-pixel-l1-weight 0 --entity-pixel-edge-weight 0 \
   --health-pixel-l1-weight 0 --counterfactual-player-difference-weight 0 \
   --mask-prefix-player-probability 0 \
   --counterfactual-mask-prefix-player-probability 1 \
-  --pixel-loss-frames 2 \
+  --pixel-loss-frames "${PIXEL_LOSS_FRAMES}" \
   --lr "${LEARNING_RATE}" --seed 3 \
   --wandb-mode offline \
   --checkpoint-staging-dir "${PLOT_ROOT}/.checkpoint_staging_full_player_detail" \
