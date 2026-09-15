@@ -1369,12 +1369,25 @@ class FrameDepthStackPixelDiT(nn.Module):
             )
             unified_reference = reference.to(x.dtype)
             unified_reference_valid = valid.bool()
-            x = x + self.unified_reference_adapter(
-                x,
-                unified_reference,
-                unified_reference_roi,
-                unified_reference_valid,
-            )
+            if self.gradient_checkpointing and self.training:
+                reference_delta = checkpoint(
+                    lambda x_, reference_, roi_, valid_: self.unified_reference_adapter(
+                        x_, reference_, roi_, valid_
+                    ),
+                    x,
+                    unified_reference,
+                    unified_reference_roi,
+                    unified_reference_valid,
+                    use_reentrant=False,
+                )
+            else:
+                reference_delta = self.unified_reference_adapter(
+                    x,
+                    unified_reference,
+                    unified_reference_roi,
+                    unified_reference_valid,
+                )
+            x = x + reference_delta
         # embed noise steps
         t = rearrange(t, "b t -> (b t)")
         c = self.t_embedder(t)  # (N, D)

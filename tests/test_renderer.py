@@ -95,6 +95,18 @@ def test_training_time_is_clean_for_prefix_and_shared_within_each_block():
     torch.testing.assert_close(time[:, 9:17], time[:, 9:10].expand(-1, 8))
 
 
+def test_counterfactual_groups_can_share_random_training_times():
+    time = _sample_blockwise_train_time(
+        4, 17, 8, torch.device("cpu"),
+        torch.Generator().manual_seed(7), counterfactual_group_size=2,
+        counterfactual_pure_noise=False,
+    )
+    torch.testing.assert_close(time[:, 0], torch.zeros(4))
+    torch.testing.assert_close(time[0], time[1])
+    torch.testing.assert_close(time[2], time[3])
+    assert bool(((time[:, 1:] > 0) & (time[:, 1:] < 1)).all())
+
+
 def test_training_backward_and_supervision_only_masks():
     model = tiny_model().train()
     cond = conditions(65)
@@ -271,6 +283,12 @@ def test_unified_player_reference_is_the_only_appearance_route_and_uses_all_view
     cond["player_reference"] = torch.rand(1, 2, 4, 4, 32, 16)
     encoded = unified.encode_conditions(cond)
     assert encoded["unified_reference_tokens"].shape == (1, 2, 4, 32, 256)
+
+    high_detail = Renderer(replace(
+        base.cfg, unified_player_reference=True, player_reference_grid_size=(16, 8),
+    )).eval()
+    high_detail_tokens = high_detail.encode_conditions(cond)["unified_reference_tokens"]
+    assert high_detail_tokens.shape == (1, 2, 4, 128, 256)
     assert "entity_reference_view_weights" not in encoded
     assert "appearance_spatial_condition" not in encoded
 

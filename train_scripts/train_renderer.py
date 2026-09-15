@@ -135,6 +135,14 @@ def main():
         default=1.0,
         help="Player-region flow-focus probability on grouped S11 steps",
     )
+    parser.add_argument(
+        "--counterfactual-random-timesteps",
+        action="store_true",
+        help=(
+            "Train grouped S11 variants at shared ordinary random diffusion times "
+            "instead of forcing every future block to the pure-noise endpoint"
+        ),
+    )
     parser.add_argument("--val-window-index")
     parser.add_argument("--health-focus-index")
     parser.add_argument(
@@ -182,6 +190,14 @@ def main():
             "Reuse the single unified reference adapter before selected zero-indexed "
             "DiT blocks; additional residual gates start at zero"
         ),
+    )
+    parser.add_argument(
+        "--player-reference-token-grid",
+        nargs=2,
+        type=int,
+        default=(8, 4),
+        metavar=("HEIGHT", "WIDTH"),
+        help="Spatial token grid retained from each native 256x128 RGBA player view",
     )
     parser.add_argument(
         "--freeze-base-for-appearance",
@@ -335,6 +351,8 @@ def main():
         parser.error(
             "--unified-reference-reinject-blocks requires --unified-player-reference"
         )
+    if any(size < 1 for size in args.player_reference_token_grid):
+        parser.error("--player-reference-token-grid dimensions must be positive")
     if len(set(args.unified_reference_reinject_blocks)) != len(
         args.unified_reference_reinject_blocks
     ) or any(
@@ -529,6 +547,7 @@ def main():
         detail_preserving_appearance=args.detail_preserving_appearance,
         entity_reference_attention=args.entity_reference_attention,
         unified_player_reference=args.unified_player_reference,
+        player_reference_grid_size=tuple(args.player_reference_token_grid),
         unified_reference_reinject_blocks=tuple(
             args.unified_reference_reinject_blocks
         ),
@@ -789,6 +808,7 @@ def main():
         "counterfactual_player_difference_weight": (
             args.counterfactual_player_difference_weight
         ),
+        "counterfactual_pure_noise": not args.counterfactual_random_timesteps,
     }
     for step in range(start_step + 1, args.steps + 1):
         optimizer.zero_grad(set_to_none=True)

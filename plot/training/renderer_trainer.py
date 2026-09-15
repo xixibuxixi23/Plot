@@ -17,7 +17,7 @@ def slice_conditions(cond, start, end):
 
 def _sample_blockwise_train_time(
     batch_size, total_frames, block_frames, device, generator=None,
-    counterfactual_group_size=1,
+    counterfactual_group_size=1, counterfactual_pure_noise=True,
 ):
     """Keep the observed prefix clean and assign one noise time per future block."""
     future_frames = total_frames - 1
@@ -26,7 +26,7 @@ def _sample_blockwise_train_time(
     if counterfactual_group_size < 1 or batch_size % counterfactual_group_size:
         raise ValueError("batch size must be divisible by counterfactual group size")
     groups = batch_size // counterfactual_group_size
-    if counterfactual_group_size > 1:
+    if counterfactual_group_size > 1 and counterfactual_pure_noise:
         # Counterfactual siblings have different clean player pixels. At an
         # ordinary interpolation time, those pixels remain in x_t and let the
         # network reconstruct the appearance without reading its reference.
@@ -49,6 +49,7 @@ def _sample_blockwise_train_time(
 def renderer_flow_loss(
     model, clean, conditions, *, region_weight=None, generator=None,
     return_clean_prediction=False, counterfactual_group_size=1,
+    counterfactual_pure_noise=True,
 ):
     """Block-causal diffusion-forcing loss with frame zero known.
 
@@ -70,7 +71,7 @@ def renderer_flow_loss(
     block_frames = base.cfg.block_frames
     time = _sample_blockwise_train_time(
         len(clean), clean.shape[1], block_frames, clean.device, generator,
-        counterfactual_group_size,
+        counterfactual_group_size, counterfactual_pure_noise,
     )
     noise = torch.randn(
         (len(clean) // counterfactual_group_size, *clean.shape[1:]),
@@ -436,6 +437,7 @@ def renderer_training_losses(
     player_identity_negative_weight=0.5,
     counterfactual_group_size=1,
     counterfactual_player_difference_weight=0.0,
+    counterfactual_pure_noise=True,
     generator=None,
 ):
     """Combine latent flow matching with sparse full-resolution supervision."""
@@ -464,6 +466,7 @@ def renderer_training_losses(
         generator=generator,
         return_clean_prediction=use_pixels or use_identity or use_counterfactual,
         counterfactual_group_size=counterfactual_group_size,
+        counterfactual_pure_noise=counterfactual_pure_noise,
     )
     if use_pixels or use_identity or use_counterfactual:
         flow_loss, clean_prediction = result

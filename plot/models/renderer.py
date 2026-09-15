@@ -41,6 +41,7 @@ class RendererArgs:
     detail_preserving_appearance: bool = False
     entity_reference_attention: bool = False
     unified_player_reference: bool = False
+    player_reference_grid_size: tuple[int, int] = (8, 4)
     unified_reference_reinject_blocks: tuple[int, ...] = ()
 
 
@@ -118,6 +119,8 @@ class Renderer(nn.Module):
         super().__init__()
         if cfg.block_frames < 1:
             raise ValueError("block_frames must be positive")
+        if any(size < 1 for size in cfg.player_reference_grid_size):
+            raise ValueError("player reference grid dimensions must be positive")
         if cfg.detail_preserving_appearance and not cfg.view_aware_appearance:
             raise ValueError("detail-preserving appearance requires view-aware appearance")
         if cfg.unified_player_reference and (
@@ -142,7 +145,11 @@ class Renderer(nn.Module):
             else None
         )
         use_reference_tokens = cfg.entity_reference_attention or cfg.unified_player_reference
-        self.reference_encoder = PlayerReferenceEncoder(256) if use_reference_tokens else None
+        self.reference_encoder = (
+            PlayerReferenceEncoder(256, grid_size=cfg.player_reference_grid_size)
+            if use_reference_tokens
+            else None
+        )
         self.reference_layout = (
             PlayerReferenceLayout(cfg.input_h, cfg.input_w)
             if use_reference_tokens else None
