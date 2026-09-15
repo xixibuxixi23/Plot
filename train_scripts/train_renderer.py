@@ -173,6 +173,17 @@ def main():
         ),
     )
     parser.add_argument(
+        "--unified-reference-reinject-blocks",
+        nargs="*",
+        type=int,
+        default=(),
+        metavar="BLOCK",
+        help=(
+            "Reuse the single unified reference adapter before selected zero-indexed "
+            "DiT blocks; additional residual gates start at zero"
+        ),
+    )
+    parser.add_argument(
         "--freeze-base-for-appearance",
         action="store_true",
         help="Stage-one training: update only the new dense appearance modules",
@@ -319,6 +330,19 @@ def main():
     ):
         parser.error(
             "--unified-player-reference replaces all legacy appearance/reference flags"
+        )
+    if args.unified_reference_reinject_blocks and not args.unified_player_reference:
+        parser.error(
+            "--unified-reference-reinject-blocks requires --unified-player-reference"
+        )
+    if len(set(args.unified_reference_reinject_blocks)) != len(
+        args.unified_reference_reinject_blocks
+    ) or any(
+        index < 0 or index >= args.depth
+        for index in args.unified_reference_reinject_blocks
+    ):
+        parser.error(
+            "--unified-reference-reinject-blocks must contain unique valid block indices"
         )
     if args.appearance_unfreeze_last_spatial_blocks and not args.freeze_base_for_appearance:
         parser.error(
@@ -505,6 +529,9 @@ def main():
         detail_preserving_appearance=args.detail_preserving_appearance,
         entity_reference_attention=args.entity_reference_attention,
         unified_player_reference=args.unified_player_reference,
+        unified_reference_reinject_blocks=tuple(
+            args.unified_reference_reinject_blocks
+        ),
     )
     with torch.cuda.device(device):
         raw_model = Renderer(cfg).to(device).train()

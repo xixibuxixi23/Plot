@@ -317,6 +317,57 @@ def test_unified_player_reference_is_the_only_appearance_route_and_uses_all_view
     assert grad is not None and grad.abs().sum() > 0
 
 
+def test_unified_reference_reinjection_is_shared_gated_and_exact_at_warm_start():
+    base = tiny_model()
+    single = Renderer(replace(base.cfg, unified_player_reference=True)).eval()
+    single.load_state_dict(base.state_dict(), strict=False)
+    with torch.no_grad():
+        single.core.unified_reference_adapter.to_output.weight.normal_(std=.02)
+        single.core.unified_reference_adapter.to_output.bias.normal_(std=.02)
+
+    repeated = Renderer(replace(
+        base.cfg,
+        unified_player_reference=True,
+        unified_reference_reinject_blocks=(0, 1),
+    )).eval()
+    incompatible = repeated.load_state_dict(single.state_dict(), strict=False)
+    assert incompatible.unexpected_keys == []
+    assert incompatible.missing_keys == [
+        "core.unified_reference_adapter.reinjection_gates"
+    ]
+    assert sum(
+        type(module).__name__ == "UnifiedPlayerReferenceAdapter"
+        for module in repeated.modules()
+    ) == 1
+
+    cond = conditions(9)
+    x, time = torch.randn(1, 9, 16, 4, 4), torch.rand(1, 9)
+    with torch.no_grad():
+        baseline = single(x, time, cond)
+        exact_warm_start = repeated(x, time, cond)
+    torch.testing.assert_close(baseline, exact_warm_start, rtol=0, atol=0)
+
+    with torch.no_grad():
+        repeated.core.unified_reference_adapter.reinjection_gates.fill_(0.5)
+        reinjected = repeated(x, time, cond)
+    assert not torch.allclose(baseline, reinjected)
+
+    repeated.train()
+    repeated.zero_grad(set_to_none=True)
+    with torch.no_grad():
+        repeated.core.unified_reference_adapter.reinjection_gates.zero_()
+    repeated(x, time, cond).square().mean().backward()
+    gate_grad = repeated.core.unified_reference_adapter.reinjection_gates.grad
+    assert gate_grad is not None and gate_grad.abs().sum() > 0
+
+    with pytest.raises(ValueError, match="valid DiT block indices"):
+        Renderer(replace(
+            base.cfg,
+            unified_player_reference=True,
+            unified_reference_reinject_blocks=(2,),
+        ))
+
+
 def test_view_aware_appearance_preserves_reference_pixels_and_selects_back_view():
     renderer = ViewAwarePlayerAppearance(height=8, width=8)
     b, t, a = 1, 1, 2
