@@ -9,6 +9,7 @@ BASE_ROOT="${BASE_ROOT:-/public/0_DATA/2_Avatar/zhizhou_share/rcz/textagent/data
 S11_ROOT="${S11_ROOT:-/public/0_DATA/2_Avatar/zhizhou_share/rcz/textagent/data/s11_mixed_train_v2_g100_v4_20260914}"
 INDEX_PATH="${INDEX_PATH:-${PLOT_ROOT}/derived/s11/mixed_train_v2_complete_g100_c65.pt}"
 BASE_CHECKPOINT="${BASE_CHECKPOINT:-${PLOT_ROOT}/outputs/m3_mixed_s11_referenceonly_formal_27000_37000_20260914/step_0034750.pt}"
+RESUME="${RESUME:-}"
 OUTPUT_DIR="${OUTPUT_DIR:-${PLOT_ROOT}/outputs/m3_full_player_detail_34750_39750_20260915}"
 CUDA_DEVICES="${CUDA_DEVICES:-0,1,2,3,4,5,6,7}"
 FINAL_STEP="${FINAL_STEP:-39750}"
@@ -16,8 +17,9 @@ S11_STEP_PROBABILITY="${S11_STEP_PROBABILITY:-0.20}"
 LEARNING_RATE="${LEARNING_RATE:-0.00002}"
 REINJECT_BLOCKS="${REINJECT_BLOCKS-3 7 11}"
 
-[[ -f "${BASE_CHECKPOINT}" ]] || {
-  echo "missing warm-start checkpoint: ${BASE_CHECKPOINT}" >&2
+CHECKPOINT_PATH="${RESUME:-${BASE_CHECKPOINT}}"
+[[ -f "${CHECKPOINT_PATH}" ]] || {
+  echo "missing checkpoint: ${CHECKPOINT_PATH}" >&2
   exit 2
 }
 [[ -f "${INDEX_PATH}" ]] || {
@@ -38,6 +40,11 @@ if [[ -n "${REINJECT_BLOCKS}" ]]; then
   reinjection_args=(--unified-reference-reinject-blocks "${reinjection_blocks[@]}")
 fi
 
+checkpoint_args=(--warm-start "${BASE_CHECKPOINT}")
+if [[ -n "${RESUME}" ]]; then
+  checkpoint_args=(--resume "${RESUME}")
+fi
+
 exec "${PLOT_ROOT}/.venv/bin/python" -m torch.distributed.run \
   --standalone --nproc-per-node=8 train_scripts/train_renderer.py \
   --dataset-root "${BASE_ROOT}" --train-split train \
@@ -49,7 +56,7 @@ exec "${PLOT_ROOT}/.venv/bin/python" -m torch.distributed.run \
   --counterfactual-variants 4 \
   --vocabulary derived/common/block_vocabulary.json \
   --pixel-vae checkpoints/pixel_vae/model.safetensors \
-  --warm-start "${BASE_CHECKPOINT}" --output-dir "${OUTPUT_DIR}" \
+  "${checkpoint_args[@]}" --output-dir "${OUTPUT_DIR}" \
   --unified-player-reference "${reinjection_args[@]}" \
   --player-reference-token-grid 16 8 \
   --counterfactual-random-timesteps \
