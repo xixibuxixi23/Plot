@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import sys
 import os
+from time import perf_counter
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -20,6 +21,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 
 from plot.data.renderer_dataset import TextAgentRendererDataset, collate_renderer
+from plot.data.appearance_counterfactual_dataset import AppearanceCounterfactualRendererDataset
 from plot.models.renderer import Renderer, RendererArgs
 from plot.models.renderer_codec import RendererCodec
 from plot.models.player_identity import PlayerIdentityEncoder
@@ -40,6 +42,17 @@ LOSS_NAMES = (
     "player_identity_loss",
     "player_identity_similarity",
     "player_identity_ranking_accuracy",
+    "counterfactual_player_difference_loss",
+)
+
+AUXILIARY_LOSS_WEIGHT_NAMES = (
+    "entity_pixel_l1_weight",
+    "entity_pixel_edge_weight",
+    "player_pixel_l1_weight",
+    "player_pixel_edge_weight",
+    "health_pixel_l1_weight",
+    "player_identity_loss_weight",
+    "counterfactual_player_difference_weight",
 )
 
 
@@ -74,9 +87,51 @@ def build_flow_region_weight(
     return base_weight + player_upweight * gate[:, None, None, None, None] * latent_mask
 
 
+def use_counterfactual_step(step: int, probability: float, seed: int) -> bool:
+    """Choose mixed S11 steps reproducibly, including after checkpoint resume."""
+    if probability <= 0:
+        return False
+    if probability >= 1:
+        return True
+    # SplitMix64 gives every absolute training step a stable pseudo-random draw.
+    # Depending on the absolute step (rather than iterator RNG state) makes a
+    # resumed run use exactly the same data-source schedule.
+    mask = (1 << 64) - 1
+    value = (int(step) + int(seed) * 0x9E3779B97F4A7C15) & mask
+    value = ((value ^ (value >> 30)) * 0xBF58476D1CE4E5B9) & mask
+    value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & mask
+    value ^= value >> 31
+    return value < int(float(probability) * (1 << 64))
+
+
+def effective_auxiliary_loss_weights(args):
+    """Resolve configured auxiliary weights for the selected training mode."""
+    if args.loss_mode == "flow":
+        return {name: 0.0 for name in AUXILIARY_LOSS_WEIGHT_NAMES}
+    return {name: float(getattr(args, name)) for name in AUXILIARY_LOSS_WEIGHT_NAMES}
+
+
+def _start_profile_range(enabled, device):
+    if not enabled:
+        return None
+    torch.cuda.synchronize(device)
+    return perf_counter()
+
+
+def _finish_profile_range(timings, name, started, device):
+    if started is None:
+        return
+    torch.cuda.synchronize(device)
+    timings[name] = timings.get(name, 0.0) + perf_counter() - started
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset-root", required=True)
+    parser.add_argument(
+        "--train-split", choices=("train", "pilot"), default="train",
+        help="pilot is intended only for small controlled diagnostics such as S11",
+    )
     parser.add_argument("--vocabulary", required=True)
     parser.add_argument("--pixel-vae", required=True)
     parser.add_argument("--backbone-checkpoint")
@@ -86,6 +141,48 @@ def main():
     )
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--window-index")
+    parser.add_argument(
+        "--chunk-cache-root",
+        help="Optional M3 chunk-cache root; requires a portable chunk-cache window index",
+    )
+    parser.add_argument(
+        "--appearance-counterfactual",
+        action="store_true",
+        help="group complete S11 skin variants by identical trajectory/start/target",
+    )
+    parser.add_argument("--counterfactual-variants", type=int, default=4)
+    parser.add_argument(
+        "--counterfactual-dataset-root",
+        help=(
+            "Optional S11 root mixed with the ordinary --dataset-root while "
+            "preserving complete appearance groups"
+        ),
+    )
+    parser.add_argument("--counterfactual-window-index")
+    parser.add_argument(
+        "--counterfactual-chunk-cache-root",
+        help="Optional independent chunk-cache root for the grouped S11 dataset",
+    )
+    parser.add_argument(
+        "--counterfactual-step-probability",
+        type=float,
+        default=0.0,
+        help="Fraction of optimizer steps drawn from grouped S11 data",
+    )
+    parser.add_argument(
+        "--counterfactual-player-mask-probability",
+        type=float,
+        default=1.0,
+        help="Player-region flow-focus probability on grouped S11 steps",
+    )
+    parser.add_argument(
+        "--counterfactual-random-timesteps",
+        action="store_true",
+        help=(
+            "Train grouped S11 variants at shared ordinary random diffusion times "
+            "instead of forcing every future block to the pure-noise endpoint"
+        ),
+    )
     parser.add_argument("--val-window-index")
     parser.add_argument("--health-focus-index")
     parser.add_argument(
@@ -114,6 +211,46 @@ def main():
         "--entity-reference-attention",
         action="store_true",
         help="Cross-attend native-resolution per-resident RGBA reference tokens inside coarse ROIs",
+    )
+    parser.add_argument(
+        "--unified-player-reference",
+        action="store_true",
+        help=(
+            "Use one input-level all-view player reference adapter; replaces pooled, "
+            "view-warped and per-block reference appearance paths"
+        ),
+    )
+    parser.add_argument(
+        "--unified-reference-reinject-blocks",
+        nargs="*",
+        type=int,
+        default=(),
+        metavar="BLOCK",
+        help=(
+            "Reuse the single unified reference adapter before selected zero-indexed "
+            "DiT blocks; additional residual gates start at zero"
+        ),
+    )
+    parser.add_argument(
+        "--player-reference-token-grid",
+        nargs=2,
+        type=int,
+        default=(8, 4),
+        metavar=("HEIGHT", "WIDTH"),
+        help="Spatial token grid retained from each native 256x128 RGBA player view",
+    )
+    parser.add_argument(
+        "--player-reference-position-encoding",
+        action="store_true",
+        help="Add fixed 2D source coordinates to each per-view appearance token",
+    )
+    parser.add_argument(
+        "--geometry-aware-player-reference",
+        action="store_true",
+        help=(
+            "Bias unified reference attention by camera-facing view and matching "
+            "source/target local player coordinates"
+        ),
     )
     parser.add_argument(
         "--freeze-base-for-appearance",
@@ -154,7 +291,14 @@ def main():
     parser.add_argument("--actor-channels", type=int, default=16)
     parser.add_argument("--target-views-per-window", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--workers", type=int, default=0)
+    parser.add_argument(
+        "--workers", type=int, default=4,
+        help="DataLoader workers per DDP rank (4 means 32 total workers on 8 GPUs)",
+    )
+    parser.add_argument(
+        "--prefetch-factor", type=int, default=2,
+        help="Batches prefetched by each DataLoader worker (used only when --workers > 0)",
+    )
     parser.add_argument("--steps", type=int, default=10000)
     parser.add_argument("--save-every", type=int, default=1000)
     parser.add_argument("--validate-every", type=int, default=1000)
@@ -164,6 +308,24 @@ def main():
     parser.add_argument("--log-every", type=int, default=20)
     parser.add_argument("--gradient-accumulation", type=int, default=1)
     parser.add_argument("--precision", choices=("bf16", "fp32"), default="bf16")
+    parser.add_argument(
+        "--loss-mode",
+        choices=("combined", "flow"),
+        default="combined",
+        help=(
+            "combined uses the configured auxiliary losses; flow forces all "
+            "decoded-pixel, identity, and counterfactual auxiliary weights to zero"
+        ),
+    )
+    parser.add_argument(
+        "--profile-local-step",
+        type=int,
+        default=0,
+        help=(
+            "time the Nth optimizer step after resume, print a synchronized stage "
+            "breakdown, then exit without writing a checkpoint; 0 disables profiling"
+        ),
+    )
     parser.add_argument(
         "--latent-entity-region-upweight",
         type=float,
@@ -198,6 +360,17 @@ def main():
     parser.add_argument("--player-identity-loss-weight", type=float, default=0.0)
     parser.add_argument("--player-identity-margin", type=float, default=0.2)
     parser.add_argument("--player-identity-negative-weight", type=float, default=0.5)
+    parser.add_argument("--counterfactual-player-difference-weight", type=float, default=0.0)
+    parser.add_argument(
+        "--mask-prefix-player-probability", type=float, default=0.0,
+        help="replace visible other-player pixels in the observed prefix with mid-gray",
+    )
+    parser.add_argument(
+        "--counterfactual-mask-prefix-player-probability",
+        type=float,
+        default=1.0,
+        help="prefix-player masking probability on grouped S11 steps",
+    )
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument(
         "--unfrozen-base-lr-scale",
@@ -221,6 +394,10 @@ def main():
         help="Keep training and record failures, or stop if a checkpoint cannot be copied",
     )
     args = parser.parse_args()
+    if args.workers < 0:
+        parser.error("--workers must be nonnegative")
+    if args.prefetch_factor < 1:
+        parser.error("--prefetch-factor must be positive")
     if sum(bool(path) for path in (args.resume, args.warm_start, args.backbone_checkpoint)) > 1:
         parser.error("--resume, --warm-start, and --backbone-checkpoint are mutually exclusive")
     if args.freeze_base_for_appearance and not args.view_aware_appearance:
@@ -229,12 +406,48 @@ def main():
         parser.error("--detail-preserving-appearance requires --view-aware-appearance")
     if args.freeze_base_for_appearance and args.resume:
         parser.error("use --warm-start for staged appearance training")
-    if args.freeze_base_for_reference and not args.entity_reference_attention:
-        parser.error("--freeze-base-for-reference requires --entity-reference-attention")
-    if args.freeze_base_for_reference and args.resume:
-        parser.error("use --warm-start for staged reference training")
+    if args.freeze_base_for_reference and not (
+        args.entity_reference_attention or args.unified_player_reference
+    ):
+        parser.error(
+            "--freeze-base-for-reference requires --entity-reference-attention "
+            "or --unified-player-reference"
+        )
+    if (
+        args.freeze_base_for_reference
+        and args.resume
+        and not args.unified_player_reference
+    ):
+        parser.error("use --warm-start for staged legacy reference training")
     if args.freeze_base_for_reference and args.freeze_base_for_appearance:
         parser.error("choose only one staged-freezing mode")
+    if args.unified_player_reference and (
+        args.entity_reference_attention
+        or args.view_aware_appearance
+        or args.detail_preserving_appearance
+    ):
+        parser.error(
+            "--unified-player-reference replaces all legacy appearance/reference flags"
+        )
+    if args.unified_reference_reinject_blocks and not args.unified_player_reference:
+        parser.error(
+            "--unified-reference-reinject-blocks requires --unified-player-reference"
+        )
+    if args.geometry_aware_player_reference and not args.unified_player_reference:
+        parser.error(
+            "--geometry-aware-player-reference requires --unified-player-reference"
+        )
+    if any(size < 1 for size in args.player_reference_token_grid):
+        parser.error("--player-reference-token-grid dimensions must be positive")
+    if len(set(args.unified_reference_reinject_blocks)) != len(
+        args.unified_reference_reinject_blocks
+    ) or any(
+        index < 0 or index >= args.depth
+        for index in args.unified_reference_reinject_blocks
+    ):
+        parser.error(
+            "--unified-reference-reinject-blocks must contain unique valid block indices"
+        )
     if args.appearance_unfreeze_last_spatial_blocks and not args.freeze_base_for_appearance:
         parser.error(
             "--appearance-unfreeze-last-spatial-blocks requires "
@@ -250,9 +463,45 @@ def main():
         parser.error("--reference-unfreeze-last-spatial-blocks must be between 0 and depth")
     if not 0 <= args.player_mask_probability <= 1:
         parser.error("--player-mask-probability must be between 0 and 1")
+    if not 0 <= args.mask_prefix_player_probability <= 1:
+        parser.error("--mask-prefix-player-probability must be between 0 and 1")
+    if not 0 <= args.counterfactual_player_mask_probability <= 1:
+        parser.error("--counterfactual-player-mask-probability must be between 0 and 1")
+    if not 0 <= args.counterfactual_mask_prefix_player_probability <= 1:
+        parser.error(
+            "--counterfactual-mask-prefix-player-probability must be between 0 and 1"
+        )
+    if args.appearance_counterfactual and args.target_views_per_window != 1:
+        parser.error("--appearance-counterfactual requires --target-views-per-window 1")
+    if not 0 <= args.counterfactual_step_probability <= 1:
+        parser.error("--counterfactual-step-probability must be between 0 and 1")
+    if bool(args.counterfactual_dataset_root) != bool(args.counterfactual_step_probability):
+        parser.error(
+            "--counterfactual-dataset-root and a positive "
+            "--counterfactual-step-probability must be used together"
+        )
+    if args.appearance_counterfactual and args.counterfactual_dataset_root:
+        parser.error(
+            "use either dedicated --appearance-counterfactual training or mixed "
+            "--counterfactual-dataset-root training"
+        )
+    if (
+        args.loss_mode == "combined"
+        and args.counterfactual_player_difference_weight > 0
+        and not (args.appearance_counterfactual or args.counterfactual_dataset_root)
+    ):
+        parser.error("counterfactual difference loss requires grouped S11 data")
     if args.unfrozen_base_lr_scale <= 0:
         parser.error("--unfrozen-base-lr-scale must be positive")
-    if args.player_identity_loss_weight > 0 and not args.player_identity_checkpoint:
+    if args.profile_local_step < 0:
+        parser.error("--profile-local-step must be nonnegative")
+    if args.profile_local_step and args.gradient_accumulation != 1:
+        parser.error("--profile-local-step currently requires --gradient-accumulation 1")
+    if (
+        args.loss_mode == "combined"
+        and args.player_identity_loss_weight > 0
+        and not args.player_identity_checkpoint
+    ):
         parser.error("--player-identity-loss-weight requires --player-identity-checkpoint")
     if (
         min(
@@ -284,12 +533,15 @@ def main():
         args.player_identity_loss_weight,
         args.player_identity_margin,
         args.player_identity_negative_weight,
+        args.counterfactual_player_difference_weight,
     ) < 0:
         parser.error("region and pixel loss weights must be nonnegative")
     world = int(os.environ.get("WORLD_SIZE", "1"))
     rank = int(os.environ.get("RANK", "0"))
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     device = torch.device(f"cuda:{local_rank}" if world > 1 else args.device)
+    if device.type == "cuda" and device.index is None:
+        device = torch.device("cuda:0")
     if device.type != "cuda":
         parser.error(
             "raw voxel rasterization needs CUDA; use CPU contract tests for smoke validation"
@@ -305,29 +557,83 @@ def main():
     if world > 1:
         dist.init_process_group("nccl", device_id=device)
     torch.manual_seed(args.seed + rank)
-    dataset = TextAgentRendererDataset(
-        args.dataset_root,
-        args.vocabulary,
+    dataset_class = (
+        AppearanceCounterfactualRendererDataset
+        if args.appearance_counterfactual
+        else TextAgentRendererDataset
+    )
+    dataset_kwargs = dict(
+        split=args.train_split,
         context_frames=args.context_frames,
         window_index=args.window_index,
         targets_per_window=args.target_views_per_window,
         entity_region_upweight=args.latent_entity_region_upweight,
         health_focus_index=args.health_focus_index,
         health_focus_oversample=args.health_focus_oversample,
+        chunk_cache_root=args.chunk_cache_root,
+    )
+    if args.appearance_counterfactual:
+        dataset_kwargs["variants_per_group"] = args.counterfactual_variants
+    dataset = dataset_class(
+        args.dataset_root,
+        args.vocabulary,
+        **dataset_kwargs,
     )
     sampler = (
         DistributedSampler(dataset, num_replicas=world, rank=rank, shuffle=True, seed=args.seed)
         if world > 1
         else None
     )
+    worker_kwargs = {"num_workers": args.workers}
+    if args.workers > 0:
+        worker_kwargs.update(
+            persistent_workers=True,
+            prefetch_factor=args.prefetch_factor,
+        )
     loader = DataLoader(
         dataset,
         batch_size=args.batch_size,
         shuffle=sampler is None,
         sampler=sampler,
-        num_workers=args.workers,
         collate_fn=collate_renderer,
+        **worker_kwargs,
     )
+    counterfactual_dataset = None
+    counterfactual_sampler = None
+    counterfactual_loader = None
+    if args.counterfactual_dataset_root:
+        counterfactual_dataset = AppearanceCounterfactualRendererDataset(
+            args.counterfactual_dataset_root,
+            args.vocabulary,
+            split="train",
+            context_frames=args.context_frames,
+            window_index=args.counterfactual_window_index,
+            chunk_cache_root=args.counterfactual_chunk_cache_root,
+            targets_per_window=1,
+            variants_per_group=args.counterfactual_variants,
+            entity_region_upweight=args.latent_entity_region_upweight,
+        )
+        if counterfactual_dataset.item_vocabulary != dataset.item_vocabulary:
+            raise ValueError("ordinary and S11 item vocabularies differ")
+        counterfactual_sampler = (
+            DistributedSampler(
+                counterfactual_dataset,
+                num_replicas=world,
+                rank=rank,
+                shuffle=True,
+                seed=args.seed + 1,
+            )
+            if world > 1
+            else None
+        )
+        counterfactual_loader = DataLoader(
+            counterfactual_dataset,
+            batch_size=args.batch_size,
+            shuffle=counterfactual_sampler is None,
+            sampler=counterfactual_sampler,
+            collate_fn=collate_renderer,
+            **worker_kwargs,
+        )
     cfg = RendererArgs(
         dataset.vocabulary.size,
         max(dataset.item_vocabulary.values()) + 1,
@@ -344,6 +650,13 @@ def main():
         view_aware_appearance=args.view_aware_appearance,
         detail_preserving_appearance=args.detail_preserving_appearance,
         entity_reference_attention=args.entity_reference_attention,
+        unified_player_reference=args.unified_player_reference,
+        player_reference_grid_size=tuple(args.player_reference_token_grid),
+        player_reference_position_encoding=args.player_reference_position_encoding,
+        geometry_aware_player_reference=args.geometry_aware_player_reference,
+        unified_reference_reinject_blocks=tuple(
+            args.unified_reference_reinject_blocks
+        ),
     )
     with torch.cuda.device(device):
         raw_model = Renderer(cfg).to(device).train()
@@ -353,7 +666,7 @@ def main():
             print(json.dumps(report))
     codec = RendererCodec(load_weights(args.pixel_vae)).to(device).eval()
     identity_encoder = None
-    if args.player_identity_checkpoint:
+    if args.loss_mode == "combined" and args.player_identity_checkpoint:
         identity_checkpoint = torch.load(
             args.player_identity_checkpoint, map_location="cpu", weights_only=False
         )
@@ -371,6 +684,7 @@ def main():
             trainable = name.startswith((
                 "reference_encoder.",
                 "core.entity_reference_adapters.",
+                "core.unified_reference_adapter.",
             ))
             if args.reference_unfreeze_last_spatial_blocks:
                 trainable = trainable or name.startswith("core.final_layer.")
@@ -417,7 +731,11 @@ def main():
         for name, parameter in raw_model.named_parameters():
             if not parameter.requires_grad:
                 continue
-            if name.startswith(("reference_encoder.", "core.entity_reference_adapters.")):
+            if name.startswith((
+                "reference_encoder.",
+                "core.entity_reference_adapters.",
+                "core.unified_reference_adapter.",
+            )):
                 reference_parameters.append(parameter)
             else:
                 base_parameters.append(parameter)
@@ -440,7 +758,35 @@ def main():
         start_step = int(checkpoint["step"])
     elif args.warm_start:
         checkpoint = torch.load(args.warm_start, map_location="cpu", weights_only=False)
-        incompatible = raw_model.load_state_dict(checkpoint["model"], strict=False)
+        warm_state = dict(checkpoint["model"])
+        migrated_parameters = []
+        if args.unified_player_reference:
+            # Reuse the trained first legacy reference adapter for the single
+            # input-level adapter. Shapes are identical; only routing retains
+            # the four-view axis instead of pre-averaging it.
+            old_prefix = "core.entity_reference_adapters.0."
+            new_prefix = "core.unified_reference_adapter."
+            for key, value in list(warm_state.items()):
+                if key.startswith(old_prefix):
+                    new_key = new_prefix + key[len(old_prefix):]
+                    warm_state[new_key] = value
+                    migrated_parameters.append(f"{key}->{new_key}")
+            legacy_prefixes = (
+                "resident_encoder.skin_view_encoder.",
+                "resident_encoder.appearance_direction_embedding",
+                "resident_encoder.skin_view_fusion.",
+                "appearance_spatial_encoder.",
+                "core.appearance_condition_embedder.",
+                "core.appearance_detail_embedder.",
+                "core.appearance_detail_reinjectors.",
+                "core.appearance_reinjectors.",
+                "core.entity_reference_adapters.",
+            )
+            warm_state = {
+                key: value for key, value in warm_state.items()
+                if not key.startswith(legacy_prefixes)
+            }
+        incompatible = raw_model.load_state_dict(warm_state, strict=False)
         allowed_missing = (
             "core.hud_condition_embedder.",
             "core.condition_reinjectors.",
@@ -449,6 +795,7 @@ def main():
             "core.appearance_detail_reinjectors.",
             "reference_encoder.",
             "core.entity_reference_adapters.",
+            "core.unified_reference_adapter.",
             "core.appearance_reinjectors.",
         )
         invalid_missing = [
@@ -466,6 +813,7 @@ def main():
                 "warm_start": str(args.warm_start),
                 "step": start_step,
                 "initialized_parameters": incompatible.missing_keys,
+                "migrated_parameters": migrated_parameters,
             }))
     model = (
         DistributedDataParallel(raw_model, device_ids=[local_rank], broadcast_buffers=False)
@@ -503,6 +851,7 @@ def main():
                 "effective_view_batch_size": (
                     args.batch_size
                     * args.target_views_per_window
+                    * getattr(dataset, "group_size", 1)
                     * world
                     * args.gradient_accumulation
                 ),
@@ -520,6 +869,7 @@ def main():
             split="val_id",
             context_frames=args.context_frames,
             window_index=args.val_window_index,
+            chunk_cache_root=args.chunk_cache_root,
             entity_region_upweight=args.latent_entity_region_upweight,
         )
         val_sampler = (
@@ -532,8 +882,8 @@ def main():
             batch_size=args.batch_size,
             sampler=val_sampler,
             shuffle=False,
-            num_workers=args.workers,
             collate_fn=collate_renderer,
+            **worker_kwargs,
         )
         if rank == 0 and args.visualize_every:
             probes = select_renderer_probes(val_dataset)
@@ -544,38 +894,95 @@ def main():
             flush=True,
         )
     iterator = iter(loader)
+    counterfactual_iterator = (
+        iter(counterfactual_loader) if counterfactual_loader is not None else None
+    )
     epoch = 0
+    counterfactual_epoch = 0
+    auxiliary_weights = effective_auxiliary_loss_weights(args)
     loss_kwargs = {
         "frames_per_sample": args.pixel_loss_frames,
-        "entity_pixel_l1_weight": args.entity_pixel_l1_weight,
-        "entity_pixel_edge_weight": args.entity_pixel_edge_weight,
-        "player_pixel_l1_weight": args.player_pixel_l1_weight,
-        "player_pixel_edge_weight": args.player_pixel_edge_weight,
-        "health_pixel_l1_weight": args.health_pixel_l1_weight,
+        "entity_pixel_l1_weight": auxiliary_weights["entity_pixel_l1_weight"],
+        "entity_pixel_edge_weight": auxiliary_weights["entity_pixel_edge_weight"],
+        "player_pixel_l1_weight": auxiliary_weights["player_pixel_l1_weight"],
+        "player_pixel_edge_weight": auxiliary_weights["player_pixel_edge_weight"],
+        "health_pixel_l1_weight": auxiliary_weights["health_pixel_l1_weight"],
         "damaged_health_upweight": args.damaged_health_upweight,
         "identity_encoder": identity_encoder,
-        "player_identity_loss_weight": args.player_identity_loss_weight,
+        "player_identity_loss_weight": auxiliary_weights["player_identity_loss_weight"],
         "player_identity_margin": args.player_identity_margin,
         "player_identity_negative_weight": args.player_identity_negative_weight,
+        "counterfactual_group_size": getattr(dataset, "group_size", 1),
+        "counterfactual_player_difference_weight": (
+            auxiliary_weights["counterfactual_player_difference_weight"]
+        ),
+        "counterfactual_pure_noise": not args.counterfactual_random_timesteps,
     }
     for step in range(start_step + 1, args.steps + 1):
+        profile_this_step = args.profile_local_step == step - start_step
+        profile_timings = {}
+        profile_step_started = _start_profile_range(profile_this_step, device)
         optimizer.zero_grad(set_to_none=True)
         accumulated = {name: 0.0 for name in LOSS_NAMES}
+        counterfactual_step = bool(
+            counterfactual_loader is not None
+            and use_counterfactual_step(
+                step, args.counterfactual_step_probability, args.seed
+            )
+        )
+        active_dataset = counterfactual_dataset if counterfactual_step else dataset
         for micro in range(args.gradient_accumulation):
-            try:
-                batch = next(iterator)
-            except StopIteration:
-                epoch += 1
-                if sampler is not None:
-                    sampler.set_epoch(epoch)
-                iterator = iter(loader)
-                batch = next(iterator)
+            data_started = perf_counter() if profile_this_step else None
+            if counterfactual_step:
+                try:
+                    batch = next(counterfactual_iterator)
+                except StopIteration:
+                    counterfactual_epoch += 1
+                    if counterfactual_sampler is not None:
+                        counterfactual_sampler.set_epoch(counterfactual_epoch)
+                    counterfactual_iterator = iter(counterfactual_loader)
+                    batch = next(counterfactual_iterator)
+            else:
+                try:
+                    batch = next(iterator)
+                except StopIteration:
+                    epoch += 1
+                    if sampler is not None:
+                        sampler.set_epoch(epoch)
+                    iterator = iter(loader)
+                    batch = next(iterator)
+            if data_started is not None:
+                profile_timings["data_wait_cpu"] = perf_counter() - data_started
+            transfer_started = _start_profile_range(profile_this_step, device)
             rgb = batch["rgb"].to(device)
+            prefix_mask_probability = (
+                args.counterfactual_mask_prefix_player_probability
+                if counterfactual_step or args.appearance_counterfactual
+                else args.mask_prefix_player_probability
+            )
+            if prefix_mask_probability > 0:
+                group_size = getattr(active_dataset, "group_size", 1)
+                group_count = len(rgb) // group_size
+                gate = (torch.rand(group_count, device=device)
+                        < prefix_mask_probability)
+                gate = gate.repeat_interleave(group_size)
+                prefix_player = batch["player_region_mask"][:, :1].to(device).bool()
+                rgb = rgb.clone()
+                rgb[:, :1] = torch.where(
+                    gate[:, None, None, None, None] & prefix_player,
+                    rgb.new_tensor(0.5), rgb[:, :1],
+                )
+            _finish_profile_range(
+                profile_timings, "rgb_to_gpu_and_prefix", transfer_started, device
+            )
+            encode_started = _start_profile_range(profile_this_step, device)
             with (
                 torch.no_grad(),
                 torch.autocast("cuda", dtype=torch.bfloat16, enabled=args.precision == "bf16"),
             ):
                 latent = codec.encode(rgb)
+            _finish_profile_range(profile_timings, "vae_encode", encode_started, device)
+            loss_forward_started = _start_profile_range(profile_this_step, device)
             conditions = {k: v.to(device) for k, v in batch["conditions"].items()}
             sync = (
                 model.no_sync()
@@ -596,23 +1003,95 @@ def main():
                             batch["region_weight"].to(device),
                             batch["player_region_mask"].to(device),
                             player_upweight=args.latent_player_region_upweight,
-                            probability=args.player_mask_probability,
+                            probability=(
+                                args.counterfactual_player_mask_probability
+                                if counterfactual_step or args.appearance_counterfactual
+                                else args.player_mask_probability
+                            ),
                             randomize=True,
                         ),
                         player_identity_mask=batch["player_identity_mask"].to(device),
                         player_identity_frame=batch["player_identity_frame"].to(device),
                         player_identity_slot=batch["player_identity_slot"].to(device),
                         player_identity_valid=batch["player_identity_valid"].to(device),
-                        **loss_kwargs,
+                        profile_timings=profile_timings if profile_this_step else None,
+                        **{
+                            **loss_kwargs,
+                            "counterfactual_group_size": getattr(
+                                active_dataset, "group_size", 1
+                            ),
+                            "counterfactual_player_difference_weight": (
+                                auxiliary_weights[
+                                    "counterfactual_player_difference_weight"
+                                ]
+                                if counterfactual_step or args.appearance_counterfactual
+                                else 0.0
+                            ),
+                        },
                     )
                     loss = losses["total_loss"] / args.gradient_accumulation
+                _finish_profile_range(
+                    profile_timings, "loss_forward_total", loss_forward_started, device
+                )
                 if not torch.isfinite(loss):
                     raise FloatingPointError(f"non-finite M3 loss at step {step}")
+                backward_started = _start_profile_range(profile_this_step, device)
                 loss.backward()
+                _finish_profile_range(
+                    profile_timings, "backward", backward_started, device
+                )
             for name in LOSS_NAMES:
                 accumulated[name] += float(losses[name].detach()) / args.gradient_accumulation
+        clip_started = _start_profile_range(profile_this_step, device)
         torch.nn.utils.clip_grad_norm_(raw_model.parameters(), 1.0)
+        _finish_profile_range(profile_timings, "grad_clip", clip_started, device)
+        optimizer_started = _start_profile_range(profile_this_step, device)
         optimizer.step()
+        _finish_profile_range(profile_timings, "optimizer_step", optimizer_started, device)
+        if profile_this_step:
+            _finish_profile_range(
+                profile_timings, "step_wall_gpu_synchronized", profile_step_started, device
+            )
+            loss_forward = profile_timings["loss_forward_total"]
+            nested = (
+                profile_timings.get("m3_forward", 0.0)
+                + profile_timings.get("vae_decode_for_loss", 0.0)
+            )
+            profile_timings["loss_forward_other"] = max(0.0, loss_forward - nested)
+            exclusive_names = (
+                "rgb_to_gpu_and_prefix",
+                "vae_encode",
+                "m3_forward",
+                "vae_decode_for_loss",
+                "loss_forward_other",
+                "backward",
+                "grad_clip",
+                "optimizer_step",
+            )
+            exclusive_total = sum(
+                profile_timings.get(name, 0.0) for name in exclusive_names
+            )
+            wall_total = profile_timings["step_wall_gpu_synchronized"]
+            accounted = exclusive_total + profile_timings.get("data_wait_cpu", 0.0)
+            profile_timings["unattributed_wall"] = max(0.0, wall_total - accounted)
+            report_names = ("data_wait_cpu", *exclusive_names, "unattributed_wall")
+            report = {
+                "profiled_global_step": step,
+                "profiled_local_step": step - start_step,
+                "loss_mode": args.loss_mode,
+                "batch_size": args.batch_size,
+                "seconds": profile_timings,
+                "wall_percent": {
+                    name: 100.0 * profile_timings.get(name, 0.0) / max(wall_total, 1e-12)
+                    for name in report_names
+                },
+            }
+            print("PROFILE_STEP_TIMING " + json.dumps(report, sort_keys=True), flush=True)
+            if rank == 0 and run:
+                run.finish()
+            if world > 1:
+                dist.destroy_process_group()
+            return
         reduced = torch.tensor([accumulated[name] for name in LOSS_NAMES], device=device)
         if world > 1:
             dist.all_reduce(reduced)
@@ -641,18 +1120,22 @@ def main():
                 "train/cuda_memory_allocated_max_gib": float(memory_by_rank[:, 0].max()),
                 "train/cuda_peak_allocated_max_gib": float(memory_by_rank[:, 1].max()),
                 "train/cuda_peak_reserved_max_gib": float(memory_by_rank[:, 2].max()),
+                "train/counterfactual_step": float(counterfactual_step),
             }
             memory_text = " ".join(
                 f"rank{index}_peak_reserved_gib={float(values[2]):.2f}"
                 for index, values in enumerate(memory_by_rank)
             )
             print(
-                f"step={step} loss={train_log['train/total_loss']:.6f} "
+                f"step={step} source={'s11' if counterfactual_step else 'ordinary'} "
+                f"loss={train_log['train/total_loss']:.6f} "
                 f"flow={train_log['train/flow_loss']:.6f} "
                 f"entity_l1={train_log['train/entity_pixel_l1']:.6f} "
                 f"health_l1={train_log['train/health_pixel_l1']:.6f} "
                 f"identity={train_log['train/player_identity_loss']:.6f} "
                 f"identity_sim={train_log['train/player_identity_similarity']:.4f} "
+                f"player_l1={train_log['train/player_pixel_l1']:.6f} "
+                f"counterfactual={train_log['train/counterfactual_player_difference_loss']:.6f} "
                 f"peak_reserved_max_gib={train_log['train/cuda_peak_reserved_max_gib']:.2f} "
                 f"{memory_text}",
                 flush=True,
@@ -672,6 +1155,11 @@ def main():
                     ):
                         latent = codec.encode(rgb)
                         condition = {k: v.to(device) for k, v in val["conditions"].items()}
+                        val_loss_kwargs = dict(
+                            loss_kwargs,
+                            counterfactual_group_size=1,
+                            counterfactual_player_difference_weight=0.0,
+                        )
                         val_losses = renderer_training_losses(
                             raw_model,
                             codec,
@@ -694,7 +1182,7 @@ def main():
                             generator=torch.Generator(device=device).manual_seed(
                                 args.seed + number
                             ),
-                            **loss_kwargs,
+                            **val_loss_kwargs,
                         )
                         values.append(torch.stack([val_losses[name] for name in LOSS_NAMES]))
             metric = (

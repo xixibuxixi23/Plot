@@ -1,11 +1,16 @@
 from dataclasses import replace
+from types import SimpleNamespace
 import numpy as np
 import pytest
 import torch
 
 from plot.data.fill_dataset import BlockVocabulary
+from plot.data.appearance_counterfactual_dataset import AppearanceCounterfactualRendererDataset
 from plot.data.renderer_dataset import incoming_actions, merge_observation_crops, raster_camera
 from plot.models.renderer import Renderer, RendererArgs
+from plot.training.renderer_trainer import (
+    _sample_blockwise_train_time, renderer_counterfactual_player_loss,
+)
 from plot.models.renderer_backbone.player_spatial_condition import ViewAwarePlayerAppearance
 from plot.pipelines.renderer_pipeline import RendererMemoryBlock
 from plot.training.renderer_trainer import (
@@ -16,6 +21,10 @@ from plot.training.renderer_trainer import (
     renderer_training_losses,
     select_renderer_pixel_frames,
     slice_conditions,
+)
+from train_scripts.train_renderer import (
+    effective_auxiliary_loss_weights,
+    use_counterfactual_step,
 )
 
 
@@ -87,6 +96,18 @@ def test_training_time_is_clean_for_prefix_and_shared_within_each_block():
     torch.testing.assert_close(time[:, 0], torch.zeros(2))
     torch.testing.assert_close(time[:, 1:9], time[:, 1:2].expand(-1, 8))
     torch.testing.assert_close(time[:, 9:17], time[:, 9:10].expand(-1, 8))
+
+
+def test_counterfactual_groups_can_share_random_training_times():
+    time = _sample_blockwise_train_time(
+        4, 17, 8, torch.device("cpu"),
+        torch.Generator().manual_seed(7), counterfactual_group_size=2,
+        counterfactual_pure_noise=False,
+    )
+    torch.testing.assert_close(time[:, 0], torch.zeros(4))
+    torch.testing.assert_close(time[0], time[1])
+    torch.testing.assert_close(time[2], time[3])
+    assert bool(((time[:, 1:] > 0) & (time[:, 1:] < 1)).all())
 
 
 def test_training_backward_and_supervision_only_masks():
@@ -231,6 +252,199 @@ def test_entity_reference_attention_is_an_exact_trainable_warm_start():
         and adapter.to_output.weight.grad.abs().sum() > 0
         for adapter in reference.core.entity_reference_adapters
     )
+
+
+def test_unified_player_reference_is_the_only_appearance_route_and_uses_all_views():
+    base = tiny_model()
+    unified = Renderer(replace(
+        base.cfg,
+        unified_player_reference=True,
+    )).eval()
+    incompatible = unified.load_state_dict(base.state_dict(), strict=False)
+    assert not incompatible.missing_keys or all(
+        key.startswith(("reference_encoder.", "core.unified_reference_adapter."))
+        for key in incompatible.missing_keys
+    )
+    assert all(
+        key.startswith((
+            "resident_encoder.skin_view_encoder.",
+            "resident_encoder.appearance_direction_embedding",
+            "resident_encoder.skin_view_fusion.",
+        ))
+        for key in incompatible.unexpected_keys
+    )
+    assert unified.appearance_spatial_encoder is None
+    assert unified.core.entity_reference_adapters is None
+    assert unified.core.unified_reference_adapter is not None
+    assert not hasattr(unified.resident_encoder, "skin_view_encoder")
+    assert sum(
+        type(module).__name__ == "UnifiedPlayerReferenceAdapter"
+        for module in unified.modules()
+    ) == 1
+
+    cond = conditions(9)
+    cond["player_reference"] = torch.rand(1, 2, 4, 4, 32, 16)
+    encoded = unified.encode_conditions(cond)
+    assert encoded["unified_reference_tokens"].shape == (1, 2, 4, 32, 256)
+
+    high_detail = Renderer(replace(
+        base.cfg, unified_player_reference=True, player_reference_grid_size=(16, 8),
+        player_reference_position_encoding=True,
+    )).eval()
+    high_detail_tokens = high_detail.encode_conditions(cond)["unified_reference_tokens"]
+    assert high_detail_tokens.shape == (1, 2, 4, 128, 256)
+    plain_high_detail = Renderer(replace(
+        high_detail.cfg, player_reference_position_encoding=False,
+    )).eval()
+    plain_high_detail.load_state_dict(high_detail.state_dict(), strict=True)
+    plain_tokens = plain_high_detail.encode_conditions(cond)["unified_reference_tokens"]
+    expected_position = high_detail.reference_encoder.position_embedding
+    torch.testing.assert_close(
+        high_detail_tokens[0, 0, 0] - plain_tokens[0, 0, 0],
+        expected_position,
+    )
+    assert expected_position.shape == (128, 256)
+    assert not torch.allclose(expected_position[0], expected_position[-1])
+    assert "reference_encoder.position_embedding" not in high_detail.state_dict()
+    assert "entity_reference_view_weights" not in encoded
+    assert "appearance_spatial_condition" not in encoded
+
+    # Changing the legacy pooled skin cannot affect either state or spatial
+    # conditions when the explicit reference tensor is held fixed.
+    changed_skin = dict(cond, player_skin=torch.rand_like(cond["player_skin"]))
+    changed_encoded = unified.encode_conditions(changed_skin)
+    torch.testing.assert_close(
+        encoded["extra_condition"], changed_encoded["extra_condition"], rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        encoded["actor_spatial_condition"],
+        changed_encoded["actor_spatial_condition"],
+        rtol=0,
+        atol=0,
+    )
+
+    x, time = torch.randn(1, 9, 16, 4, 4), torch.rand(1, 9)
+    with torch.no_grad():
+        zero_outputs = []
+        for view in range(4):
+            altered = cond["player_reference"].clone()
+            altered[:, 1, view] += 2
+            zero_outputs.append(unified(x, time, dict(cond, player_reference=altered)))
+    for output in zero_outputs[1:]:
+        torch.testing.assert_close(output, zero_outputs[0], rtol=0, atol=0)
+
+    # Once the single zero-initialized output projection learns, every source
+    # view remains independently available (there is no four-select-one step).
+    with torch.no_grad():
+        unified.core.unified_reference_adapter.to_output.weight.normal_(std=.02)
+    with torch.no_grad():
+        learned_outputs = []
+        for view in range(4):
+            altered = cond["player_reference"].clone()
+            altered[:, 1, view] += 2
+            learned_outputs.append(unified(x, time, dict(cond, player_reference=altered)))
+    for output in learned_outputs[1:]:
+        assert not torch.allclose(output, learned_outputs[0])
+
+    unified.train()
+    unified(x, time, cond).square().mean().backward()
+    grad = unified.core.unified_reference_adapter.to_output.weight.grad
+    assert grad is not None and grad.abs().sum() > 0
+
+
+def test_geometry_aware_unified_reference_uses_view_and_local_coordinates():
+    base = tiny_model()
+    plain = Renderer(replace(
+        base.cfg,
+        unified_player_reference=True,
+    )).eval()
+    plain.load_state_dict(base.state_dict(), strict=False)
+    with torch.no_grad():
+        plain.core.unified_reference_adapter.to_output.weight.normal_(std=.02)
+
+    geometry = Renderer(replace(
+        plain.cfg,
+        geometry_aware_player_reference=True,
+    )).eval()
+    incompatible = geometry.load_state_dict(plain.state_dict(), strict=False)
+    assert incompatible.unexpected_keys == []
+    assert incompatible.missing_keys == [
+        "core.unified_reference_adapter.geometry_log_scale",
+        "core.unified_reference_adapter.geometry_view_logit",
+    ]
+
+    cond = conditions(9)
+    cond["player_reference"] = torch.rand(1, 2, 4, 4, 32, 16)
+    encoded = geometry.encode_conditions(cond)
+    assert encoded["unified_reference_view_weights"].shape == (1, 9, 2, 4)
+    assert encoded["unified_reference_local_coordinates"].shape == (1, 9, 2, 4, 4, 2)
+    assert "core.unified_reference_adapter.reference_coordinates" not in geometry.state_dict()
+
+    x, time = torch.randn(1, 9, 16, 4, 4), torch.rand(1, 9)
+    with torch.no_grad():
+        plain_output = plain(x, time, cond)
+        geometry_output = geometry(x, time, cond)
+    assert not torch.allclose(plain_output, geometry_output)
+
+    geometry.train()
+    geometry.zero_grad(set_to_none=True)
+    geometry(x, time, cond).square().mean().backward()
+    adapter = geometry.core.unified_reference_adapter
+    scale_grad = adapter.geometry_log_scale.grad
+    view_grad = adapter.geometry_view_logit.grad
+    assert scale_grad is not None and scale_grad.abs().sum() > 0
+    assert view_grad is not None and view_grad.abs().sum() > 0
+
+
+def test_unified_reference_reinjection_is_shared_gated_and_exact_at_warm_start():
+    base = tiny_model()
+    single = Renderer(replace(base.cfg, unified_player_reference=True)).eval()
+    single.load_state_dict(base.state_dict(), strict=False)
+    with torch.no_grad():
+        single.core.unified_reference_adapter.to_output.weight.normal_(std=.02)
+        single.core.unified_reference_adapter.to_output.bias.normal_(std=.02)
+
+    repeated = Renderer(replace(
+        base.cfg,
+        unified_player_reference=True,
+        unified_reference_reinject_blocks=(0, 1),
+    )).eval()
+    incompatible = repeated.load_state_dict(single.state_dict(), strict=False)
+    assert incompatible.unexpected_keys == []
+    assert incompatible.missing_keys == [
+        "core.unified_reference_adapter.reinjection_gates"
+    ]
+    assert sum(
+        type(module).__name__ == "UnifiedPlayerReferenceAdapter"
+        for module in repeated.modules()
+    ) == 1
+
+    cond = conditions(9)
+    x, time = torch.randn(1, 9, 16, 4, 4), torch.rand(1, 9)
+    with torch.no_grad():
+        baseline = single(x, time, cond)
+        exact_warm_start = repeated(x, time, cond)
+    torch.testing.assert_close(baseline, exact_warm_start, rtol=0, atol=0)
+
+    with torch.no_grad():
+        repeated.core.unified_reference_adapter.reinjection_gates.fill_(0.5)
+        reinjected = repeated(x, time, cond)
+    assert not torch.allclose(baseline, reinjected)
+
+    repeated.train()
+    repeated.zero_grad(set_to_none=True)
+    with torch.no_grad():
+        repeated.core.unified_reference_adapter.reinjection_gates.zero_()
+    repeated(x, time, cond).square().mean().backward()
+    gate_grad = repeated.core.unified_reference_adapter.reinjection_gates.grad
+    assert gate_grad is not None and gate_grad.abs().sum() > 0
+
+    with pytest.raises(ValueError, match="valid DiT block indices"):
+        Renderer(replace(
+            base.cfg,
+            unified_player_reference=True,
+            unified_reference_reinject_blocks=(2,),
+        ))
 
 
 def test_view_aware_appearance_preserves_reference_pixels_and_selects_back_view():
@@ -401,8 +615,8 @@ def test_continuous_dataset_preserves_state_time_and_splits(tmp_path, monkeypatc
              entity_render_object_id=np.tile([10,11],(t,1)).astype(np.uint16),
              entity_weapon_name=np.tile(['','sword'],(t,1)), entity_valid=np.ones((t,a),bool),
              instance_mask=np.stack((
-                 np.full((t,4,4),11,np.uint16),
-                 np.full((t,4,4),10,np.uint16),
+                 np.full((t,8,8),11,np.uint16),
+                 np.full((t,8,8),10,np.uint16),
              ),axis=1))
     for slot in range(a):
         root = tmp_path / 'players' / f'agent{slot}'
@@ -455,9 +669,139 @@ def test_continuous_dataset_preserves_state_time_and_splits(tmp_path, monkeypatc
         health_focus_index=focus_index, health_focus_oversample=3,
     )
     assert len(focused) == 4  # two ordinary targets plus two extra copies of target zero
+    from plot.data.chunked_npz import write_chunked_npz
+    cache_root = tmp_path / "cache"
+    cache_file = cache_root / "episode" / "data.m3c8.npz"
+    write_chunked_npz(tmp_path / "data.npz", cache_file, chunk_frames=8)
+    cached_manifest = json.loads((tmp_path / "manifest.json").read_text())
+    cached_manifest["m3_chunk_cache_file"] = "episode/data.m3c8.npz"
+    window_index = tmp_path / "portable_chunk_index.pt"
+    torch.save({
+        "context_frames": 17,
+        "split": "train",
+        "item_vocabulary": {"": 0, "sword": 1},
+        "episodes": [{"path": ".", "manifest": cached_manifest}],
+        "windows": [(0, 0, 0)],
+    }, window_index)
+    cached = module.TextAgentRendererDataset(
+        tmp_path, BlockVocabulary((0,7)), context_frames=17,
+        image_size=(4,4), latent_size=(4,4), window_index=window_index,
+        chunk_cache_root=cache_root,
+    )[0]
+    assert torch.equal(cached["region_weight"], sample["region_weight"])
+    assert torch.equal(cached["pixel_region_mask"], sample["pixel_region_mask"])
+    assert torch.equal(
+        cached["conditions"]["voxel_classes"], sample["conditions"]["voxel_classes"]
+    )
     with pytest.raises(ValueError,match='no accepted'):
         module.TextAgentRendererDataset(tmp_path,BlockVocabulary((0,7)),split='test',context_frames=17)
 
+
+def test_counterfactual_groups_use_identical_pure_noise_and_supervise_target_difference():
+    time = _sample_blockwise_train_time(
+        4, 17, 8, torch.device("cpu"),
+        torch.Generator().manual_seed(3), counterfactual_group_size=2,
+    )
+    torch.testing.assert_close(time[:, 0], torch.zeros(4))
+    torch.testing.assert_close(time[:, 1:], torch.ones(4, 16))
+    clean = torch.zeros(2, 17, 2, 2, 2)
+    clean[1, 1:] = 1
+
+    class CaptureNoisyInput(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.cfg = SimpleNamespace(context_frames=17, block_frames=8)
+            self.core = SimpleNamespace(kv_caches=None)
+
+        def forward(self, noisy, _time, _conditions):
+            self.noisy = noisy.detach().clone()
+            return torch.zeros_like(noisy)
+
+    capture = CaptureNoisyInput()
+    renderer_flow_loss(
+        capture, clean, {}, counterfactual_group_size=2,
+        generator=torch.Generator().manual_seed(11),
+    )
+    torch.testing.assert_close(capture.noisy[0, 1:], capture.noisy[1, 1:])
+
+    mask = torch.ones(2, 17, 1, 4, 4, dtype=torch.bool)
+    ignored_reference = torch.zeros_like(clean)
+    assert renderer_counterfactual_player_loss(
+        ignored_reference, clean, mask, 2
+    ) > 0
+    assert renderer_counterfactual_player_loss(clean, clean, mask, 2) == 0
+
+
+def test_mixed_counterfactual_schedule_is_stable_and_close_to_requested_ratio():
+    first = [use_counterfactual_step(step, 0.2, 17) for step in range(1, 10_001)]
+    resumed = [use_counterfactual_step(step, 0.2, 17) for step in range(5_001, 10_001)]
+    assert first[5_000:] == resumed
+    assert 0.18 < sum(first) / len(first) < 0.22
+    assert not any(use_counterfactual_step(step, 0.0, 17) for step in range(10))
+    assert all(use_counterfactual_step(step, 1.0, 17) for step in range(10))
+
+
+def test_counterfactual_dataset_canonicalizes_voxels_but_keeps_references():
+    class Base:
+        def _read_target(self, episode, start, target):
+            return {"conditions": {
+                "voxel_classes": torch.full((2,), episode),
+                "voxel_known": torch.ones(2, dtype=torch.bool),
+                "player_position": torch.tensor([
+                    [[0., 0., 0.], [1., 2., 3.]],
+                    [[0., 1., 0.], [1., 3., 3.]],
+                ]) + torch.tensor([float(episode), -2. * episode, 3. * episode]),
+                "player_valid": torch.ones(2, 2, dtype=torch.bool),
+                "camera_direction": torch.zeros(2, 2, 3) + episode * 1e-7,
+                "raster_camera": torch.zeros(2, 10) + episode * 1e-7,
+                "player_reference": torch.full((2, 4, 4, 2, 2), float(episode)),
+            }}
+
+    dataset = AppearanceCounterfactualRendererDataset.__new__(
+        AppearanceCounterfactualRendererDataset
+    )
+    dataset.base = Base()
+    dataset.index = [((0, 0, 0), (1, 0, 0))]
+    samples = dataset[0]
+    torch.testing.assert_close(
+        samples[0]["conditions"]["voxel_classes"],
+        samples[1]["conditions"]["voxel_classes"],
+    )
+    torch.testing.assert_close(
+        samples[0]["conditions"]["player_position"],
+        samples[1]["conditions"]["player_position"],
+    )
+    torch.testing.assert_close(
+        samples[0]["conditions"]["raster_camera"],
+        samples[1]["conditions"]["raster_camera"],
+    )
+    assert not torch.equal(
+        samples[0]["conditions"]["player_reference"],
+        samples[1]["conditions"]["player_reference"],
+    )
+
+
+def test_counterfactual_dataset_rejects_relative_geometry_changes():
+    class Base:
+        def _read_target(self, episode, start, target):
+            position = torch.tensor([[[0., 0., 0.], [1., 2., 3.]]])
+            if episode:
+                position[:, 1, 0] += 1
+            return {"conditions": {
+                "voxel_classes": torch.zeros(2, dtype=torch.long),
+                "voxel_known": torch.ones(2, dtype=torch.bool),
+                "player_position": position,
+                "player_valid": torch.ones(1, 2, dtype=torch.bool),
+                "player_reference": torch.full((2, 4, 4, 2, 2), float(episode)),
+            }}
+
+    dataset = AppearanceCounterfactualRendererDataset.__new__(
+        AppearanceCounterfactualRendererDataset
+    )
+    dataset.base = Base()
+    dataset.index = [((0, 0, 0), (1, 0, 0))]
+    with pytest.raises(ValueError, match="relative player geometry"):
+        dataset[0]
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA rasterization check")
 def test_gpu_voxel_projection_backward():
@@ -556,6 +900,27 @@ def test_combined_renderer_loss_can_disable_pixel_decoder():
     )
     torch.testing.assert_close(terms['total_loss'], terms['flow_loss'])
     assert terms['auxiliary_loss'] == 0
+
+
+def test_flow_loss_mode_disables_every_auxiliary_weight():
+    configured = {
+        "entity_pixel_l1_weight": 0.5,
+        "entity_pixel_edge_weight": 0.2,
+        "player_pixel_l1_weight": 8.0,
+        "player_pixel_edge_weight": 2.0,
+        "health_pixel_l1_weight": 1.0,
+        "player_identity_loss_weight": 3.0,
+        "counterfactual_player_difference_weight": 4.0,
+    }
+    combined = effective_auxiliary_loss_weights(
+        SimpleNamespace(loss_mode="combined", **configured)
+    )
+    flow = effective_auxiliary_loss_weights(
+        SimpleNamespace(loss_mode="flow", **configured)
+    )
+    assert combined == configured
+    assert set(flow) == set(configured)
+    assert all(weight == 0 for weight in flow.values())
 
 
 def test_kv_cache_uses_requested_inference_dtype():

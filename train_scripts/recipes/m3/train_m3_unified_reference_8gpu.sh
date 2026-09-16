@@ -4,10 +4,11 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 cd "$repo_root"
 
-dataset_root=${PLOT_DATASET_ROOT:-/data/huangyh/hxh/polis_v1_20260909_360p}
-warm_start=${WARM_START:-outputs/m3_h100_8gpu_entity_reference_stage1_from25000_to27000_20260914/step_0026000.pt}
-identity_checkpoint=${IDENTITY_CHECKPOINT:-outputs/player_identity_real_finetune_h100_5gpu_20260914/step_0003300.pt}
-output_dir=${OUTPUT_DIR:-outputs/m3_identity_supervision_canary_from26000_to26500}
+dataset_root=${PLOT_DATASET_ROOT:-/public/0_DATA/2_Avatar/zhizhou_share/rcz/textagent/data/releases/polis_v1_20260909_360p}
+warm_start=${WARM_START:-outputs/m3_h200_2node_identity_canary_b2_from26000_to26500_20260914/step_0026500.pt}
+resume=${RESUME:-}
+identity_checkpoint=${IDENTITY_CHECKPOINT:-checkpoints/m3/player_identity_real_finetune/step_0003300.pt}
+output_dir=${OUTPUT_DIR:-outputs/m3_h200_2node_unified_reference_from26500_to36500_20260914}
 checkpoint_staging_dir=${PLOT_CHECKPOINT_STAGING_DIR:-.checkpoint_staging}
 nproc=${NPROC_PER_NODE:-8}
 nnodes=${NNODES:-1}
@@ -16,7 +17,14 @@ master_addr=${MASTER_ADDR:-127.0.0.1}
 master_port=${MASTER_PORT:-29500}
 python_bin=${PYTHON_BIN:-$repo_root/.venv/bin/python}
 
-for required_path in "$python_bin" "$dataset_root" "$warm_start" "$identity_checkpoint"; do
+checkpoint_path=$warm_start
+checkpoint_args=(--warm-start "$warm_start")
+if [[ -n "$resume" ]]; then
+  checkpoint_path=$resume
+  checkpoint_args=(--resume "$resume")
+fi
+
+for required_path in "$python_bin" "$dataset_root" "$checkpoint_path" "$identity_checkpoint"; do
   if [[ ! -e "$required_path" ]]; then
     echo "Required path does not exist: $required_path" >&2
     exit 1
@@ -45,9 +53,8 @@ CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7} \
   --val-window-index derived/m3/validated/val_id_c65.pt \
   --vocabulary derived/common/block_vocabulary.json \
   --pixel-vae checkpoints/pixel_vae/model.safetensors \
-  --warm-start "$warm_start" \
-  --view-aware-appearance \
-  --entity-reference-attention \
+  "${checkpoint_args[@]}" \
+  --unified-player-reference \
   --freeze-base-for-reference \
   --reference-unfreeze-last-spatial-blocks "${REFERENCE_UNFREEZE_LAST_SPATIAL_BLOCKS:-2}" \
   --unfrozen-base-lr-scale "${UNFROZEN_BASE_LR_SCALE:-0.1}" \
@@ -62,9 +69,9 @@ CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7} \
   --cache-frames 64 \
   --block-frames 8 \
   --target-views-per-window 2 \
-  --batch-size "${BATCH_SIZE:-1}" \
+  --batch-size "${BATCH_SIZE:-2}" \
   --workers "${WORKERS:-4}" \
-  --steps "${STEPS:-26500}" \
+  --steps "${STEPS:-36500}" \
   --save-every "${SAVE_EVERY:-500}" \
   --validate-every "${VALIDATE_EVERY:-500}" \
   --visualize-every "${VISUALIZE_EVERY:-500}" \
@@ -83,5 +90,5 @@ CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7} \
   --lr "${LR:-1e-4}" \
   --log-every "${LOG_EVERY:-20}" \
   --wandb-project "${WANDB_PROJECT:-plot-m3}" \
-  --wandb-name "${WANDB_NAME:-m3-identity-supervision-canary-26000-26500}" \
+  --wandb-name "${WANDB_NAME:-m3-h200-2node-unified-reference-26500-36500-20260914}" \
   --wandb-mode "${WANDB_MODE:-online}"

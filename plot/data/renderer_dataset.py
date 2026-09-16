@@ -9,6 +9,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from .chunked_npz import open_npz
 from .fill_dataset import BlockVocabulary, TextAgentFillDataset, _read_video_frames
 
 
@@ -86,7 +87,8 @@ class TextAgentRendererDataset(Dataset):
     def __init__(self, root, vocabulary, *, split="train", context_frames=65,
                  stride=8, image_size=(360, 640), latent_size=(36, 64), max_agents=8,
                  window_index=None, targets_per_window=1, entity_region_upweight=4.0,
-                 health_focus_index=None, health_focus_oversample=1):
+                 health_focus_index=None, health_focus_oversample=1,
+                 chunk_cache_root=None):
         if context_frames < 9 or (context_frames - 1) % 8 or stride < 1:
             raise ValueError("context_frames must be 1+8*k; stride must be positive")
         if targets_per_window < 1:
@@ -100,6 +102,7 @@ class TextAgentRendererDataset(Dataset):
         self.entity_region_upweight = float(entity_region_upweight)
         self.vocabulary = vocabulary if isinstance(vocabulary, BlockVocabulary) else BlockVocabulary.load(vocabulary)
         self.context_frames, self.image_size, self.latent_size = context_frames, image_size, latent_size
+        self.chunk_cache_root = Path(chunk_cache_root) if chunk_cache_root is not None else None
         self.episodes, self.index = [], []
         self.item_vocabulary = None
         if window_index is not None:
@@ -228,6 +231,7 @@ class TextAgentRendererDataset(Dataset):
         instance.context_frames = int(context_frames)
         instance.image_size, instance.latent_size = image_size, latent_size
         instance.entity_region_upweight = 4.0
+        instance.chunk_cache_root = None
         instance.health_focus_targets = set()
         instance.episodes = [(path, manifest)]
         instance.index = [(0, int(start), int(target))]
@@ -256,7 +260,18 @@ class TextAgentRendererDataset(Dataset):
         path, manifest = self.episodes[episode_id]
         t, a = self.context_frames, int(manifest["num_agents"])
         end = start + t
-        with np.load(path / manifest.get("training_data_file", "data.npz"), allow_pickle=False) as data:
+        data_path = path / manifest.get("training_data_file", "data.npz")
+        if self.chunk_cache_root is not None:
+            relative_cache = manifest.get("m3_chunk_cache_file")
+            if not relative_cache:
+                raise ValueError(
+                    "--chunk-cache-root requires an index produced by "
+                    "materialize_m3_chunk_cache.py"
+                )
+            data_path = self.chunk_cache_root / relative_cache
+            if not data_path.is_file():
+                raise FileNotFoundError(f"missing M3 chunk cache: {data_path}")
+        with open_npz(data_path) as data:
             centers = data["obs_voxel_center"][start:end]
             raw = data["obs_voxel_mt"][start:end]
             # obs0 is the prefix. Frames 1..8 use obs0's anchor, 9..16 obs8's, etc.
@@ -371,8 +386,30 @@ class TextAgentRendererDataset(Dataset):
             "player_reference": np.stack(references),
             "condition_mask": np.arange(t) == 0, "action_prefix_mask": np.arange(t) == 0,
         }
-        pixel_region_mask = (masks != 0)[:, None]
-        player_region_mask = player_masks[:, None]
+        # Raw collections retain source-resolution uint16 masks while RGB can
+        # be decoded at the configured training resolution. Resize IDs/masks
+        # with nearest-neighbor sampling so pixel losses and prefix masking
+        # always align with the RGB tensor without inventing mixed IDs.
+        if tuple(masks.shape[-2:]) != tuple(self.image_size):
+            pixel_region = np.stack([
+                cv2.resize((mask != 0).astype(np.uint8), self.image_size[::-1],
+                           interpolation=cv2.INTER_NEAREST).astype(bool)
+                for mask in masks
+            ])
+            player_region = np.stack([
+                cv2.resize(mask.astype(np.uint8), self.image_size[::-1],
+                           interpolation=cv2.INTER_NEAREST).astype(bool)
+                for mask in player_masks
+            ])
+            identity_player_mask = cv2.resize(
+                identity_player_mask.astype(np.uint8), self.image_size[::-1],
+                interpolation=cv2.INTER_NEAREST,
+            ).astype(bool)
+        else:
+            pixel_region = masks != 0
+            player_region = player_masks
+        pixel_region_mask = pixel_region[:, None]
+        player_region_mask = player_region[:, None]
         return {"rgb": torch.from_numpy(rgb),
                 "region_weight": torch.from_numpy(
                     1 + self.entity_region_upweight * weights[:, None]

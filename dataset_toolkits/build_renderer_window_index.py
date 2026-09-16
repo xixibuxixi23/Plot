@@ -47,8 +47,15 @@ def scan(job):
         for target in range(agents):
             if not (health[begin:end, target] <= 0).any():
                 windows.append((episode_id, begin, target))
-    relative_path = path.resolve().relative_to(Path(release).resolve())
-    return {"path": str(relative_path), "manifest": manifest,
+    resolved_path = path.resolve()
+    try:
+        stored_path = resolved_path.relative_to(Path(release).resolve())
+    except ValueError:
+        # Snapshot ledgers may intentionally point at completed episodes in a
+        # still-growing collection. Keep those paths absolute so the cached
+        # index remains a stable, read-only view without copying video data.
+        stored_path = resolved_path
+    return {"path": str(stored_path), "manifest": manifest,
             "items": metadata["item_vocabulary"]}, windows
 
 
