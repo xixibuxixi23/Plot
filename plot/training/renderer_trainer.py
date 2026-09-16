@@ -1,6 +1,8 @@
 """Continuous latent flow matching over causal, bidirectional eight-frame blocks."""
 from __future__ import annotations
 
+from time import perf_counter
+
 import torch
 import torch.nn.functional as F
 
@@ -8,6 +10,18 @@ from plot.models.player_identity import crop_masked_players
 
 
 STATIC_KEYS = {"target_agent", "player_skin", "player_reference", "player_appearance_valid"}
+
+
+def _profile_cuda_call(timings, name, tensor, function):
+    """Time one optional CUDA range without changing the normal training path."""
+    if timings is None:
+        return function()
+    torch.cuda.synchronize(tensor.device)
+    started = perf_counter()
+    result = function()
+    torch.cuda.synchronize(tensor.device)
+    timings[name] = timings.get(name, 0.0) + perf_counter() - started
+    return result
 
 
 def slice_conditions(cond, start, end):
@@ -49,7 +63,7 @@ def _sample_blockwise_train_time(
 def renderer_flow_loss(
     model, clean, conditions, *, region_weight=None, generator=None,
     return_clean_prediction=False, counterfactual_group_size=1,
-    counterfactual_pure_noise=True,
+    counterfactual_pure_noise=True, profile_timings=None,
 ):
     """Block-causal diffusion-forcing loss with frame zero known.
 
@@ -79,7 +93,12 @@ def renderer_flow_loss(
     ).repeat_interleave(counterfactual_group_size, dim=0)
     tau = time[..., None, None, None]
     noisy = (1 - tau) * clean + tau * noise
-    prediction = model(noisy, time, c)
+    prediction = _profile_cuda_call(
+        profile_timings,
+        "m3_forward",
+        clean,
+        lambda: model(noisy, time, c),
+    )
     error = (prediction[:, 1:].float() - (noise - clean)[:, 1:].float()).square()
     if region_weight is None:
         loss = error.mean()
@@ -229,6 +248,7 @@ def renderer_pixel_losses(
     target_agent=None,
     damaged_health_upweight=4.0,
     health_box=(190 / 640, 300 / 360, 314 / 640, 322 / 360),
+    profile_timings=None,
 ):
     """Full-resolution entity and Minecraft heart-bar losses.
 
@@ -281,7 +301,12 @@ def renderer_pixel_losses(
         if player_region_mask is not None
         else torch.zeros_like(selected_mask)
     )
-    decoded = codec.decode_for_loss(selected_latent, chunk_size=1)[:, 0]
+    decoded = _profile_cuda_call(
+        profile_timings,
+        "vae_decode_for_loss",
+        selected_latent,
+        lambda: codec.decode_for_loss(selected_latent, chunk_size=1)[:, 0],
+    )
 
     entity_l1 = _masked_mean((decoded - selected_target).abs(), selected_mask)
     # A five-pixel dilation lets boundary gradients cover anti-aliased edges,
@@ -439,6 +464,7 @@ def renderer_training_losses(
     counterfactual_player_difference_weight=0.0,
     counterfactual_pure_noise=True,
     generator=None,
+    profile_timings=None,
 ):
     """Combine latent flow matching with sparse full-resolution supervision."""
     weights = {
@@ -467,6 +493,7 @@ def renderer_training_losses(
         return_clean_prediction=use_pixels or use_identity or use_counterfactual,
         counterfactual_group_size=counterfactual_group_size,
         counterfactual_pure_noise=counterfactual_pure_noise,
+        profile_timings=profile_timings,
     )
     if use_pixels or use_identity or use_counterfactual:
         flow_loss, clean_prediction = result
@@ -485,6 +512,7 @@ def renderer_training_losses(
             hp=conditions.get("hp"),
             target_agent=conditions.get("target_agent"),
             damaged_health_upweight=damaged_health_upweight,
+            profile_timings=profile_timings,
         )
     else:
         pixels = {name: flow_loss.new_zeros(()) for name in weights}

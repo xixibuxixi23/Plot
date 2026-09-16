@@ -63,7 +63,7 @@ CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7} \
   --block-frames 8 \
   --target-views-per-window 2 \
   --batch-size "${BATCH_SIZE:-1}" \
-  --workers "${WORKERS:-2}" \
+  --workers "${WORKERS:-4}" \
   --steps "${STEPS:-26500}" \
   --save-every "${SAVE_EVERY:-500}" \
   --validate-every "${VALIDATE_EVERY:-500}" \

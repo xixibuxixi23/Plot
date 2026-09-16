@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import sys
 import os
+from time import perf_counter
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -42,6 +43,16 @@ LOSS_NAMES = (
     "player_identity_similarity",
     "player_identity_ranking_accuracy",
     "counterfactual_player_difference_loss",
+)
+
+AUXILIARY_LOSS_WEIGHT_NAMES = (
+    "entity_pixel_l1_weight",
+    "entity_pixel_edge_weight",
+    "player_pixel_l1_weight",
+    "player_pixel_edge_weight",
+    "health_pixel_l1_weight",
+    "player_identity_loss_weight",
+    "counterfactual_player_difference_weight",
 )
 
 
@@ -93,6 +104,27 @@ def use_counterfactual_step(step: int, probability: float, seed: int) -> bool:
     return value < int(float(probability) * (1 << 64))
 
 
+def effective_auxiliary_loss_weights(args):
+    """Resolve configured auxiliary weights for the selected training mode."""
+    if args.loss_mode == "flow":
+        return {name: 0.0 for name in AUXILIARY_LOSS_WEIGHT_NAMES}
+    return {name: float(getattr(args, name)) for name in AUXILIARY_LOSS_WEIGHT_NAMES}
+
+
+def _start_profile_range(enabled, device):
+    if not enabled:
+        return None
+    torch.cuda.synchronize(device)
+    return perf_counter()
+
+
+def _finish_profile_range(timings, name, started, device):
+    if started is None:
+        return
+    torch.cuda.synchronize(device)
+    timings[name] = timings.get(name, 0.0) + perf_counter() - started
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset-root", required=True)
@@ -110,6 +142,10 @@ def main():
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--window-index")
     parser.add_argument(
+        "--chunk-cache-root",
+        help="Optional M3 chunk-cache root; requires a portable chunk-cache window index",
+    )
+    parser.add_argument(
         "--appearance-counterfactual",
         action="store_true",
         help="group complete S11 skin variants by identical trajectory/start/target",
@@ -123,6 +159,10 @@ def main():
         ),
     )
     parser.add_argument("--counterfactual-window-index")
+    parser.add_argument(
+        "--counterfactual-chunk-cache-root",
+        help="Optional independent chunk-cache root for the grouped S11 dataset",
+    )
     parser.add_argument(
         "--counterfactual-step-probability",
         type=float,
@@ -251,7 +291,14 @@ def main():
     parser.add_argument("--actor-channels", type=int, default=16)
     parser.add_argument("--target-views-per-window", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--workers", type=int, default=0)
+    parser.add_argument(
+        "--workers", type=int, default=4,
+        help="DataLoader workers per DDP rank (4 means 32 total workers on 8 GPUs)",
+    )
+    parser.add_argument(
+        "--prefetch-factor", type=int, default=2,
+        help="Batches prefetched by each DataLoader worker (used only when --workers > 0)",
+    )
     parser.add_argument("--steps", type=int, default=10000)
     parser.add_argument("--save-every", type=int, default=1000)
     parser.add_argument("--validate-every", type=int, default=1000)
@@ -261,6 +308,24 @@ def main():
     parser.add_argument("--log-every", type=int, default=20)
     parser.add_argument("--gradient-accumulation", type=int, default=1)
     parser.add_argument("--precision", choices=("bf16", "fp32"), default="bf16")
+    parser.add_argument(
+        "--loss-mode",
+        choices=("combined", "flow"),
+        default="combined",
+        help=(
+            "combined uses the configured auxiliary losses; flow forces all "
+            "decoded-pixel, identity, and counterfactual auxiliary weights to zero"
+        ),
+    )
+    parser.add_argument(
+        "--profile-local-step",
+        type=int,
+        default=0,
+        help=(
+            "time the Nth optimizer step after resume, print a synchronized stage "
+            "breakdown, then exit without writing a checkpoint; 0 disables profiling"
+        ),
+    )
     parser.add_argument(
         "--latent-entity-region-upweight",
         type=float,
@@ -329,6 +394,10 @@ def main():
         help="Keep training and record failures, or stop if a checkpoint cannot be copied",
     )
     args = parser.parse_args()
+    if args.workers < 0:
+        parser.error("--workers must be nonnegative")
+    if args.prefetch_factor < 1:
+        parser.error("--prefetch-factor must be positive")
     if sum(bool(path) for path in (args.resume, args.warm_start, args.backbone_checkpoint)) > 1:
         parser.error("--resume, --warm-start, and --backbone-checkpoint are mutually exclusive")
     if args.freeze_base_for_appearance and not args.view_aware_appearance:
@@ -416,13 +485,23 @@ def main():
             "use either dedicated --appearance-counterfactual training or mixed "
             "--counterfactual-dataset-root training"
         )
-    if args.counterfactual_player_difference_weight > 0 and not (
-        args.appearance_counterfactual or args.counterfactual_dataset_root
+    if (
+        args.loss_mode == "combined"
+        and args.counterfactual_player_difference_weight > 0
+        and not (args.appearance_counterfactual or args.counterfactual_dataset_root)
     ):
         parser.error("counterfactual difference loss requires grouped S11 data")
     if args.unfrozen_base_lr_scale <= 0:
         parser.error("--unfrozen-base-lr-scale must be positive")
-    if args.player_identity_loss_weight > 0 and not args.player_identity_checkpoint:
+    if args.profile_local_step < 0:
+        parser.error("--profile-local-step must be nonnegative")
+    if args.profile_local_step and args.gradient_accumulation != 1:
+        parser.error("--profile-local-step currently requires --gradient-accumulation 1")
+    if (
+        args.loss_mode == "combined"
+        and args.player_identity_loss_weight > 0
+        and not args.player_identity_checkpoint
+    ):
         parser.error("--player-identity-loss-weight requires --player-identity-checkpoint")
     if (
         min(
@@ -491,6 +570,7 @@ def main():
         entity_region_upweight=args.latent_entity_region_upweight,
         health_focus_index=args.health_focus_index,
         health_focus_oversample=args.health_focus_oversample,
+        chunk_cache_root=args.chunk_cache_root,
     )
     if args.appearance_counterfactual:
         dataset_kwargs["variants_per_group"] = args.counterfactual_variants
@@ -504,13 +584,19 @@ def main():
         if world > 1
         else None
     )
+    worker_kwargs = {"num_workers": args.workers}
+    if args.workers > 0:
+        worker_kwargs.update(
+            persistent_workers=True,
+            prefetch_factor=args.prefetch_factor,
+        )
     loader = DataLoader(
         dataset,
         batch_size=args.batch_size,
         shuffle=sampler is None,
         sampler=sampler,
-        num_workers=args.workers,
         collate_fn=collate_renderer,
+        **worker_kwargs,
     )
     counterfactual_dataset = None
     counterfactual_sampler = None
@@ -522,6 +608,7 @@ def main():
             split="train",
             context_frames=args.context_frames,
             window_index=args.counterfactual_window_index,
+            chunk_cache_root=args.counterfactual_chunk_cache_root,
             targets_per_window=1,
             variants_per_group=args.counterfactual_variants,
             entity_region_upweight=args.latent_entity_region_upweight,
@@ -544,8 +631,8 @@ def main():
             batch_size=args.batch_size,
             shuffle=counterfactual_sampler is None,
             sampler=counterfactual_sampler,
-            num_workers=args.workers,
             collate_fn=collate_renderer,
+            **worker_kwargs,
         )
     cfg = RendererArgs(
         dataset.vocabulary.size,
@@ -579,7 +666,7 @@ def main():
             print(json.dumps(report))
     codec = RendererCodec(load_weights(args.pixel_vae)).to(device).eval()
     identity_encoder = None
-    if args.player_identity_checkpoint:
+    if args.loss_mode == "combined" and args.player_identity_checkpoint:
         identity_checkpoint = torch.load(
             args.player_identity_checkpoint, map_location="cpu", weights_only=False
         )
@@ -782,6 +869,7 @@ def main():
             split="val_id",
             context_frames=args.context_frames,
             window_index=args.val_window_index,
+            chunk_cache_root=args.chunk_cache_root,
             entity_region_upweight=args.latent_entity_region_upweight,
         )
         val_sampler = (
@@ -794,8 +882,8 @@ def main():
             batch_size=args.batch_size,
             sampler=val_sampler,
             shuffle=False,
-            num_workers=args.workers,
             collate_fn=collate_renderer,
+            **worker_kwargs,
         )
         if rank == 0 and args.visualize_every:
             probes = select_renderer_probes(val_dataset)
@@ -811,25 +899,29 @@ def main():
     )
     epoch = 0
     counterfactual_epoch = 0
+    auxiliary_weights = effective_auxiliary_loss_weights(args)
     loss_kwargs = {
         "frames_per_sample": args.pixel_loss_frames,
-        "entity_pixel_l1_weight": args.entity_pixel_l1_weight,
-        "entity_pixel_edge_weight": args.entity_pixel_edge_weight,
-        "player_pixel_l1_weight": args.player_pixel_l1_weight,
-        "player_pixel_edge_weight": args.player_pixel_edge_weight,
-        "health_pixel_l1_weight": args.health_pixel_l1_weight,
+        "entity_pixel_l1_weight": auxiliary_weights["entity_pixel_l1_weight"],
+        "entity_pixel_edge_weight": auxiliary_weights["entity_pixel_edge_weight"],
+        "player_pixel_l1_weight": auxiliary_weights["player_pixel_l1_weight"],
+        "player_pixel_edge_weight": auxiliary_weights["player_pixel_edge_weight"],
+        "health_pixel_l1_weight": auxiliary_weights["health_pixel_l1_weight"],
         "damaged_health_upweight": args.damaged_health_upweight,
         "identity_encoder": identity_encoder,
-        "player_identity_loss_weight": args.player_identity_loss_weight,
+        "player_identity_loss_weight": auxiliary_weights["player_identity_loss_weight"],
         "player_identity_margin": args.player_identity_margin,
         "player_identity_negative_weight": args.player_identity_negative_weight,
         "counterfactual_group_size": getattr(dataset, "group_size", 1),
         "counterfactual_player_difference_weight": (
-            args.counterfactual_player_difference_weight
+            auxiliary_weights["counterfactual_player_difference_weight"]
         ),
         "counterfactual_pure_noise": not args.counterfactual_random_timesteps,
     }
     for step in range(start_step + 1, args.steps + 1):
+        profile_this_step = args.profile_local_step == step - start_step
+        profile_timings = {}
+        profile_step_started = _start_profile_range(profile_this_step, device)
         optimizer.zero_grad(set_to_none=True)
         accumulated = {name: 0.0 for name in LOSS_NAMES}
         counterfactual_step = bool(
@@ -840,6 +932,7 @@ def main():
         )
         active_dataset = counterfactual_dataset if counterfactual_step else dataset
         for micro in range(args.gradient_accumulation):
+            data_started = perf_counter() if profile_this_step else None
             if counterfactual_step:
                 try:
                     batch = next(counterfactual_iterator)
@@ -858,6 +951,9 @@ def main():
                         sampler.set_epoch(epoch)
                     iterator = iter(loader)
                     batch = next(iterator)
+            if data_started is not None:
+                profile_timings["data_wait_cpu"] = perf_counter() - data_started
+            transfer_started = _start_profile_range(profile_this_step, device)
             rgb = batch["rgb"].to(device)
             prefix_mask_probability = (
                 args.counterfactual_mask_prefix_player_probability
@@ -876,11 +972,17 @@ def main():
                     gate[:, None, None, None, None] & prefix_player,
                     rgb.new_tensor(0.5), rgb[:, :1],
                 )
+            _finish_profile_range(
+                profile_timings, "rgb_to_gpu_and_prefix", transfer_started, device
+            )
+            encode_started = _start_profile_range(profile_this_step, device)
             with (
                 torch.no_grad(),
                 torch.autocast("cuda", dtype=torch.bfloat16, enabled=args.precision == "bf16"),
             ):
                 latent = codec.encode(rgb)
+            _finish_profile_range(profile_timings, "vae_encode", encode_started, device)
+            loss_forward_started = _start_profile_range(profile_this_step, device)
             conditions = {k: v.to(device) for k, v in batch["conditions"].items()}
             sync = (
                 model.no_sync()
@@ -912,26 +1014,84 @@ def main():
                         player_identity_frame=batch["player_identity_frame"].to(device),
                         player_identity_slot=batch["player_identity_slot"].to(device),
                         player_identity_valid=batch["player_identity_valid"].to(device),
+                        profile_timings=profile_timings if profile_this_step else None,
                         **{
                             **loss_kwargs,
                             "counterfactual_group_size": getattr(
                                 active_dataset, "group_size", 1
                             ),
                             "counterfactual_player_difference_weight": (
-                                args.counterfactual_player_difference_weight
+                                auxiliary_weights[
+                                    "counterfactual_player_difference_weight"
+                                ]
                                 if counterfactual_step or args.appearance_counterfactual
                                 else 0.0
                             ),
                         },
                     )
                     loss = losses["total_loss"] / args.gradient_accumulation
+                _finish_profile_range(
+                    profile_timings, "loss_forward_total", loss_forward_started, device
+                )
                 if not torch.isfinite(loss):
                     raise FloatingPointError(f"non-finite M3 loss at step {step}")
+                backward_started = _start_profile_range(profile_this_step, device)
                 loss.backward()
+                _finish_profile_range(
+                    profile_timings, "backward", backward_started, device
+                )
             for name in LOSS_NAMES:
                 accumulated[name] += float(losses[name].detach()) / args.gradient_accumulation
+        clip_started = _start_profile_range(profile_this_step, device)
         torch.nn.utils.clip_grad_norm_(raw_model.parameters(), 1.0)
+        _finish_profile_range(profile_timings, "grad_clip", clip_started, device)
+        optimizer_started = _start_profile_range(profile_this_step, device)
         optimizer.step()
+        _finish_profile_range(profile_timings, "optimizer_step", optimizer_started, device)
+        if profile_this_step:
+            _finish_profile_range(
+                profile_timings, "step_wall_gpu_synchronized", profile_step_started, device
+            )
+            loss_forward = profile_timings["loss_forward_total"]
+            nested = (
+                profile_timings.get("m3_forward", 0.0)
+                + profile_timings.get("vae_decode_for_loss", 0.0)
+            )
+            profile_timings["loss_forward_other"] = max(0.0, loss_forward - nested)
+            exclusive_names = (
+                "rgb_to_gpu_and_prefix",
+                "vae_encode",
+                "m3_forward",
+                "vae_decode_for_loss",
+                "loss_forward_other",
+                "backward",
+                "grad_clip",
+                "optimizer_step",
+            )
+            exclusive_total = sum(
+                profile_timings.get(name, 0.0) for name in exclusive_names
+            )
+            wall_total = profile_timings["step_wall_gpu_synchronized"]
+            accounted = exclusive_total + profile_timings.get("data_wait_cpu", 0.0)
+            profile_timings["unattributed_wall"] = max(0.0, wall_total - accounted)
+            report_names = ("data_wait_cpu", *exclusive_names, "unattributed_wall")
+            report = {
+                "profiled_global_step": step,
+                "profiled_local_step": step - start_step,
+                "loss_mode": args.loss_mode,
+                "batch_size": args.batch_size,
+                "seconds": profile_timings,
+                "wall_percent": {
+                    name: 100.0 * profile_timings.get(name, 0.0) / max(wall_total, 1e-12)
+                    for name in report_names
+                },
+            }
+            print("PROFILE_STEP_TIMING " + json.dumps(report, sort_keys=True), flush=True)
+            if rank == 0 and run:
+                run.finish()
+            if world > 1:
+                dist.destroy_process_group()
+            return
         reduced = torch.tensor([accumulated[name] for name in LOSS_NAMES], device=device)
         if world > 1:
             dist.all_reduce(reduced)

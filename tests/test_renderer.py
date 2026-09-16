@@ -22,7 +22,10 @@ from plot.training.renderer_trainer import (
     select_renderer_pixel_frames,
     slice_conditions,
 )
-from train_scripts.train_renderer import use_counterfactual_step
+from train_scripts.train_renderer import (
+    effective_auxiliary_loss_weights,
+    use_counterfactual_step,
+)
 
 
 torch.set_num_threads(2)
@@ -666,6 +669,30 @@ def test_continuous_dataset_preserves_state_time_and_splits(tmp_path, monkeypatc
         health_focus_index=focus_index, health_focus_oversample=3,
     )
     assert len(focused) == 4  # two ordinary targets plus two extra copies of target zero
+    from plot.data.chunked_npz import write_chunked_npz
+    cache_root = tmp_path / "cache"
+    cache_file = cache_root / "episode" / "data.m3c8.npz"
+    write_chunked_npz(tmp_path / "data.npz", cache_file, chunk_frames=8)
+    cached_manifest = json.loads((tmp_path / "manifest.json").read_text())
+    cached_manifest["m3_chunk_cache_file"] = "episode/data.m3c8.npz"
+    window_index = tmp_path / "portable_chunk_index.pt"
+    torch.save({
+        "context_frames": 17,
+        "split": "train",
+        "item_vocabulary": {"": 0, "sword": 1},
+        "episodes": [{"path": ".", "manifest": cached_manifest}],
+        "windows": [(0, 0, 0)],
+    }, window_index)
+    cached = module.TextAgentRendererDataset(
+        tmp_path, BlockVocabulary((0,7)), context_frames=17,
+        image_size=(4,4), latent_size=(4,4), window_index=window_index,
+        chunk_cache_root=cache_root,
+    )[0]
+    assert torch.equal(cached["region_weight"], sample["region_weight"])
+    assert torch.equal(cached["pixel_region_mask"], sample["pixel_region_mask"])
+    assert torch.equal(
+        cached["conditions"]["voxel_classes"], sample["conditions"]["voxel_classes"]
+    )
     with pytest.raises(ValueError,match='no accepted'):
         module.TextAgentRendererDataset(tmp_path,BlockVocabulary((0,7)),split='test',context_frames=17)
 
@@ -873,6 +900,27 @@ def test_combined_renderer_loss_can_disable_pixel_decoder():
     )
     torch.testing.assert_close(terms['total_loss'], terms['flow_loss'])
     assert terms['auxiliary_loss'] == 0
+
+
+def test_flow_loss_mode_disables_every_auxiliary_weight():
+    configured = {
+        "entity_pixel_l1_weight": 0.5,
+        "entity_pixel_edge_weight": 0.2,
+        "player_pixel_l1_weight": 8.0,
+        "player_pixel_edge_weight": 2.0,
+        "health_pixel_l1_weight": 1.0,
+        "player_identity_loss_weight": 3.0,
+        "counterfactual_player_difference_weight": 4.0,
+    }
+    combined = effective_auxiliary_loss_weights(
+        SimpleNamespace(loss_mode="combined", **configured)
+    )
+    flow = effective_auxiliary_loss_weights(
+        SimpleNamespace(loss_mode="flow", **configured)
+    )
+    assert combined == configured
+    assert set(flow) == set(configured)
+    assert all(weight == 0 for weight in flow.values())
 
 
 def test_kv_cache_uses_requested_inference_dtype():

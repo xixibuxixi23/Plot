@@ -70,6 +70,14 @@ the exact full-resolution entity mask, spatial-gradient L1 around entity edges,
 and RGB L1 over the Minecraft heart bar (`x=190:314, y=300:322` at 640x360).
 The default objective is
 `flow + 0.5*entity_L1 + 0.2*entity_edge + 1.0*health_L1`; the VAE stays frozen.
+`--loss-mode combined` (the default) applies the configured auxiliary weights.
+`--loss-mode flow` forces every decoded-pixel, identity, and counterfactual
+auxiliary weight to zero, so training skips `decode_for_loss` and optimizes only
+the latent flow objective. Latent entity/player region weighting remains
+available in both modes because it changes the weighting of the flow objective
+rather than adding a decoded auxiliary loss. Checkpoint model and optimizer
+formats are identical between the two modes, so an unchanged architecture can
+resume from the same checkpoint under either choice.
 Within a batch, damaged heart bars receive five times the weight of full-health
 bars. A separately generated health-focus index can repeat windows containing a
 non-full-health target and guarantees that target is one of the selected views.
@@ -137,6 +145,45 @@ and the `--wandb-*` flags.
 B200 environment and OSS-safe checkpoint instructions are in
 [`m3_b200.md`](m3_b200.md). In particular, set `--checkpoint-staging-dir` to
 node-local storage or PFS when `--output-dir` is on an OSS FUSE mount.
+
+## Optional local chunk cache
+
+The public dataset remains in its original continuous NPZ format. On each
+training machine, optionally build a disposable eight-frame cache after the
+raw dataset and window index have been downloaded:
+
+```bash
+python scripts/materialize_m3_chunk_cache.py \
+  --window-index /data/indexes/train_c65.pt \
+  --source-root /data/polis \
+  --output-root /local_nvme/polis_m3_cache \
+  --chunk-frames 8 \
+  --workers 2
+```
+
+The converter leaves every source file unchanged, resumes by validating and
+reusing completed cache files, and emits a new portable index below the cache
+root. Both episode and cache paths in that index are relative, so neither the
+cache nor the original machine's absolute paths need to be uploaded. Two
+conversion workers are a conservative default because each worker temporarily
+decompresses the large source arrays.
+
+Train against the original episode tree plus the local cache:
+
+```bash
+python train_scripts/train_renderer.py \
+  --dataset-root /data/polis \
+  --window-index /local_nvme/polis_m3_cache/train_c65_chunk8.pt \
+  --chunk-cache-root /local_nvme/polis_m3_cache \
+  --workers 4 \
+  ...
+```
+
+Training `--workers` is per DDP rank, so the default of four produces 32
+DataLoader workers in an eight-GPU launch. Omit `--chunk-cache-root` to retain
+the original loader. If a separate S11
+dataset is mixed in, materialize it independently and pass
+`--counterfactual-window-index` plus `--counterfactual-chunk-cache-root`.
 
 ## Inference integration
 
