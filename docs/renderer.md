@@ -95,6 +95,9 @@ available in both modes because it changes the weighting of the flow objective
 rather than adding a decoded auxiliary loss. Checkpoint model and optimizer
 formats are identical between the two modes, so an unchanged architecture can
 resume from the same checkpoint under either choice.
+The M3-Simple recipe sets both latent region upweights to zero and uses uniform
+latent flow loss only. Rollout visualization still decodes videos for evaluation
+and W&B, but those decoded metrics do not contribute gradients.
 Within a batch, damaged heart bars receive five times the weight of full-health
 bars. A separately generated health-focus index can repeat windows containing a
 non-full-health target and guarantees that target is one of the selected views.

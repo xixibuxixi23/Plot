@@ -61,16 +61,9 @@ CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES" \
   --workers "${WORKERS:-4}" \
   --steps "${STEPS:-40000}" \
   --precision bf16 --gradient-accumulation 1 \
-  --loss-mode combined \
+  --loss-mode flow \
   --latent-entity-region-upweight 0 \
-  --latent-player-region-upweight "${LATENT_PLAYER_REGION_UPWEIGHT:-8}" \
-  --player-mask-probability 1 \
-  --pixel-loss-frames "${PIXEL_LOSS_FRAMES:-4}" \
-  --entity-pixel-l1-weight 0 \
-  --entity-pixel-edge-weight 0 \
-  --player-pixel-l1-weight "${PLAYER_PIXEL_L1_WEIGHT:-8}" \
-  --player-pixel-edge-weight "${PLAYER_PIXEL_EDGE_WEIGHT:-2}" \
-  --health-pixel-l1-weight 0 \
+  --latent-player-region-upweight 0 \
   --lr "${LR:-1e-4}" \
   --save-every "${SAVE_EVERY:-500}" \
   --validate-every "${VALIDATE_EVERY:-1000}" \
