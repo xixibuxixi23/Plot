@@ -1,107 +1,80 @@
-# M3-Simple 训练交接
+# M3-Simple 实验说明
 
-当前正式目标是从零训练 M3-Simple 40,000 step，不加载或覆盖旧 M3 的 40k
-checkpoint。网络只有三条条件路线：融合场景编码、目标玩家状态 AdaLN、一次玩家外观
-reference attention。
+## 实验目标
 
-## 实验协议
+从零训练 M3-Simple 40,000 step，不加载或覆盖旧 M3 checkpoint。网络使用融合场景
+编码、目标玩家状态 AdaLN 和一次玩家外观 reference attention。
 
-- 使用 `train_scripts/recipes/m3/train_m3_simple_4gpu.sh`，从零训练 40,000 step；
-  不加载或覆盖任何旧 M3 checkpoint。
-- BF16、65 帧上下文、32 帧 KV cache、8 帧 causal block、每窗口一个目标视角。
-- 不使用梯度积累。依次真实测试每卡 batch 4、2、1，选择能够稳定完成多卡
-  forward、combined loss、backward 和 optimizer step 的最大 batch。
-- W&B 必须使用 online 模式，entity 为 `ckx23-tsinghua-university`，project 为
-  `plot-m3`。
-- 先完成 3-step 多卡 smoke，再以完全相同的 commit、数据、模型参数和 batch 启动正式训练。
-- 只使用确认空闲的 GPU，不得杀死或共享其他任务的进程。
+固定实验配置：
 
-## 需要传递的三部分
+- 4 张 GPU；每卡 batch 4，effective batch 16；
+- 不使用梯度积累；
+- BF16、65 帧上下文、32 帧 KV cache、8 帧 causal block；
+- 每窗口一个目标视角；
+- W&B online，entity 为 `ckx23-tsinghua-university`，project 为 `plot-m3`；
+- 先运行 3-step smoke，再启动 40,000-step 正式训练。
 
-1. **代码**：GitHub 分支/commit。不要传 `outputs/`、W&B 目录、数据或 checkpoint。
-2. **冻结资产**：`checkpoints/pixel_vae/model.safetensors`，精确大小 909,781,080 bytes，
-   SHA-256 为 `eb634803c94aeea980046961382f2ab67157aa71e92c5a183a35e4f61f8cbc36`。
-3. **数据**：388 GB 的 canonical 360p release。共享 `/public` 时只传路径；没有共享盘时
-   使用 `rsync -aH --info=progress2`，不要通过 GitHub。
+## 外部机器路径配置
 
-W&B API Key 不是项目文件。目标机器运行一次 `wandb login --relogin`，或者通过安全渠道
-复制用户级 `~/.netrc` 并设置权限 `chmod 600 ~/.netrc`。
-
-## 当前集群的标准路径
+所有目录都必须设置为目标机器的实际高速本地盘或 PFS，不依赖原集群的 `/public`
+路径。下面的 `/fast` 只是示例：
 
 ```bash
-export PLOT_DATASET_ROOT=/public/0_DATA/2_Avatar/zhizhou_share/rcz/textagent/data/releases/polis_two_player_fixed_skins_complete_20260917_360p
-export PLOT_CHECKPOINT_STAGING_DIR=/tmp/plot_m3_simple_checkpoints
+export PYTHON_BIN="$PWD/.venv/bin/python"
+export PLOT_DATASET_ROOT=/fast/data/polis_two_player_fixed_skins_complete_20260917_360p
+export PLOT_CHECKPOINT_STAGING_DIR=/fast/checkpoints/plot-m3-simple
+export PLOT_RUN_ROOT=/fast/outputs/plot-m3-simple
+
+# 填写目标机器上实际空闲的四张 GPU；以下编号仅为示例。
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+export NPROC_PER_NODE=4
+export BATCH_SIZE=4
+
 export WANDB_MODE=online
 export WANDB_ENTITY=ckx23-tsinghua-university
 export WANDB_PROJECT=plot-m3
+# WANDB_API_KEY 由委托人单独提供，不写入 Git 仓库。
+: "${WANDB_API_KEY:?Set the W&B API key provided by the owner}"
 ```
 
-## 目标机器验收
+创建输出目录，并确认数据盘与 checkpoint 盘空间充足：
 
 ```bash
-source .venv/bin/activate
+mkdir -p "$PLOT_CHECKPOINT_STAGING_DIR" "$PLOT_RUN_ROOT"
+```
 
-python scripts/check_m3_simple_ready.py \
+## 输入验收
+
+必须存在：
+
+- `checkpoints/pixel_vae/model.safetensors`；
+- `$PLOT_DATASET_ROOT/COMPLETE.json`；
+- `$PLOT_DATASET_ROOT/derived/m3/validated/train_c65.pt`；
+- `$PLOT_DATASET_ROOT/derived/m3/validated/val_id_c65.pt`。
+
+执行完整校验：
+
+```bash
+"$PYTHON_BIN" scripts/check_m3_simple_ready.py \
   --dataset-root "$PLOT_DATASET_ROOT" \
   --check-pixel-vae-hash \
   --check-wandb
 
-python scripts/check_m3_environment.py \
+"$PYTHON_BIN" scripts/check_m3_environment.py \
   --device cuda:0 \
-  --output-dir /tmp/plot_m3_environment_check \
+  --output-dir "$PLOT_RUN_ROOT/environment_check" \
   --checkpoint-staging-dir "$PLOT_CHECKPOINT_STAGING_DIR"
 ```
 
-若目标机器没有共享数据盘，优先从 Hugging Face 下载。脚本会逐 shard 校验
-SHA-256、解压并删除下载缓存，意外中断后可用同一条命令续传：
-
-```bash
-python scripts/download_dataset.py \
-  --output /fast/data/polis_two_player_fixed_skins_complete_20260917_360p \
-  --version fixed_skins_20260917 \
-  --splits train val_id
-```
-
-也可从源机器复制：
-
-```bash
-rsync -aH --info=progress2 \
-  SOURCE_HOST:/public/0_DATA/2_Avatar/zhizhou_share/rcz/textagent/data/releases/polis_two_player_fixed_skins_complete_20260917_360p/ \
-  /fast/data/polis_two_player_fixed_skins_complete_20260917_360p/
-
-mkdir -p checkpoints/pixel_vae
-rsync -ah --info=progress2 \
-  SOURCE_HOST:/public/0_DATA/2_Avatar/zhizhou_share/rcz/Plot/checkpoints/pixel_vae/model.safetensors \
-  checkpoints/pixel_vae/model.safetensors
-```
-
-## 自动选择 batch
-
-下面示例使用物理 GPU 4–7；目标机器必须根据实际空闲卡调整。测试结果写入独立目录，
-不会覆盖正式训练：
-
-```bash
-export CUDA_VISIBLE_DEVICES=4,5,6,7
-export NPROC_PER_NODE=4
-export PLOT_BATCH_TUNE_ROOT=/fast/outputs/m3_simple_batch_tuning
-
-bash scripts/tune_m3_simple_batch.sh
-source "$PLOT_BATCH_TUNE_ROOT/selected_batch.env"
-```
-
-`selected_batch.env` 记录 `BATCH_SIZE`、GPU 数量和 effective batch。若三个候选均失败，
-不得启动正式训练，应先修复环境、数据或显存问题。
+期望数据规模：27,043 episodes，其中 train 25,691、val-ID 1,352；训练索引
+1,888,161 windows，验证索引 99,062 windows。数据必须报告 missing 0、error 0。
 
 ## 3-step smoke
 
-下面示例使用物理 GPU 4–7。目标机器必须根据实际空闲卡调整：
+只使用确认空闲的四张 GPU，不得杀死或共享其他任务的进程：
 
 ```bash
-export CUDA_VISIBLE_DEVICES=4,5,6,7
-export NPROC_PER_NODE=4
-source "$PLOT_BATCH_TUNE_ROOT/selected_batch.env"
-export OUTPUT_DIR=/tmp/plot_m3_simple_smoke
+export OUTPUT_DIR="$PLOT_RUN_ROOT/smoke"
 export STEPS=3
 export SAVE_EVERY=500
 export VALIDATE_EVERY=1000
@@ -111,13 +84,16 @@ export WANDB_NAME=m3-simple-smoke
 bash train_scripts/recipes/m3/train_m3_simple_4gpu.sh
 ```
 
-当前 H200 实测为约 1.54 秒/step、单卡峰值显存 23.3–23.8 GiB。smoke 必须看到
-forward、combined loss、backward 和 optimizer step 全部完成。
+smoke 必须以每卡 batch 4 完成数据加载、forward、combined loss、backward 和
+optimizer step，且无 OOM、NaN 或 rank 异常退出。根据 smoke 的实测 step 时间重新估算
+正式训练耗时。
 
 ## 40k 正式训练
 
+smoke 成功后使用完全相同的 commit、数据、GPU、batch 和模型参数：
+
 ```bash
-export OUTPUT_DIR=/fast/outputs/m3_simple_fixed_skins_40k
+export OUTPUT_DIR="$PLOT_RUN_ROOT/formal_40k"
 export STEPS=40000
 export SAVE_EVERY=500
 export VALIDATE_EVERY=1000
@@ -131,11 +107,7 @@ nohup bash train_scripts/recipes/m3/train_m3_simple_4gpu.sh \
 echo $! | tee "$OUTPUT_DIR.launch.pid"
 ```
 
-默认是 4 卡、无梯度积累、BF16、65 帧上下文、32 帧 KV cache、8 帧 causal block。
-本机每卡 batch 1 实测约 1.54 秒/step，因此 40k 约需 17.1 小时；换机器或 batch 后
-必须用 smoke 的实测速度重新估算。
-
-正式启动后应报告 Git commit、数据校验、GPU、per-GPU batch、effective batch、环境检查、
+正式启动后报告 Git commit、数据校验、GPU、per-GPU batch、effective batch、环境检查、
 smoke、W&B URL、PID、日志、checkpoint、当前 step、loss、显存、step 时间和预计完成时间。
 
 安全停止时只终止 `launch.pid` 对应的本次训练进程组，绝不能按 Python 名称批量 kill。
