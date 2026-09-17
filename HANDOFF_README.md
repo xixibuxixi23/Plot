@@ -2,8 +2,7 @@
 
 ## 实验目标
 
-从零训练 M3-Simple 40,000 step，不加载或覆盖旧 M3 checkpoint。网络使用融合场景
-编码、目标玩家状态 AdaLN 和一次玩家外观 reference attention。
+训练 M3-Simple 40,000 step。
 
 固定实验配置：
 
