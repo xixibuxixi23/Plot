@@ -4,25 +4,17 @@
 checkpoint。网络只有三条条件路线：融合场景编码、目标玩家状态 AdaLN、一次玩家外观
 reference attention。
 
-## 交给目标机器 Codex 的指令
+## 实验协议
 
-把下面整段交给目标机器上的 Codex：
-
-> 请在目标机器部署并训练 PLOT 的 M3-Simple。固定使用交付方指定的 Git commit，
-> 不要切回旧的 M3 resume recipe。数据集是
-> `polis_two_player_fixed_skins_complete_20260917_360p`，必须包含 27,043 个 episode、
-> `derived/m3/validated/train_c65.pt` 和 `val_id_c65.pt`。同一集群若已挂载 `/public`
-> 就直接使用共享路径，不要重复复制 388 GB 数据。
->
-> 确认 `checkpoints/pixel_vae/model.safetensors` 存在；它是冻结的 Pixel-VAE，Git
-> 不包含这个 868 MB 文件。运行 `scripts/check_m3_simple_ready.py` 和
-> `scripts/check_m3_environment.py`。检查失败时先修复输入或环境，不要带病启动正式训练。
->
-> 使用 W&B online，entity 为 `ckx23-tsinghua-university`，project 为 `plot-m3`。
-> 凭据应由 `wandb login` 写入目标机器的 `~/.netrc`，不要把 API Key 提交到 Git。
-> 先查看 `nvidia-smi`，只选择空闲 GPU。先把 `STEPS=3` 跑通；随后用同一 commit、
-> 同一数据和同一 recipe 启动 40k 正式训练。运行中记录 PID、日志、W&B URL、输出目录、
-> checkpoint 目录、step 时间、峰值显存和预计完成时间。不要杀死或共享别人的 GPU 进程。
+- 使用 `train_scripts/recipes/m3/train_m3_simple_4gpu.sh`，从零训练 40,000 step；
+  不加载或覆盖任何旧 M3 checkpoint。
+- BF16、65 帧上下文、32 帧 KV cache、8 帧 causal block、每窗口一个目标视角。
+- 不使用梯度积累。依次真实测试每卡 batch 4、2、1，选择能够稳定完成多卡
+  forward、combined loss、backward 和 optimizer step 的最大 batch。
+- W&B 必须使用 online 模式，entity 为 `ckx23-tsinghua-university`，project 为
+  `plot-m3`。
+- 先完成 3-step 多卡 smoke，再以完全相同的 commit、数据、模型参数和 batch 启动正式训练。
+- 只使用确认空闲的 GPU，不得杀死或共享其他任务的进程。
 
 ## 需要传递的三部分
 
@@ -84,6 +76,23 @@ rsync -ah --info=progress2 \
   checkpoints/pixel_vae/model.safetensors
 ```
 
+## 自动选择 batch
+
+下面示例使用物理 GPU 4–7；目标机器必须根据实际空闲卡调整。测试结果写入独立目录，
+不会覆盖正式训练：
+
+```bash
+export CUDA_VISIBLE_DEVICES=4,5,6,7
+export NPROC_PER_NODE=4
+export PLOT_BATCH_TUNE_ROOT=/fast/outputs/m3_simple_batch_tuning
+
+bash scripts/tune_m3_simple_batch.sh
+source "$PLOT_BATCH_TUNE_ROOT/selected_batch.env"
+```
+
+`selected_batch.env` 记录 `BATCH_SIZE`、GPU 数量和 effective batch。若三个候选均失败，
+不得启动正式训练，应先修复环境、数据或显存问题。
+
 ## 3-step smoke
 
 下面示例使用物理 GPU 4–7。目标机器必须根据实际空闲卡调整：
@@ -91,6 +100,7 @@ rsync -ah --info=progress2 \
 ```bash
 export CUDA_VISIBLE_DEVICES=4,5,6,7
 export NPROC_PER_NODE=4
+source "$PLOT_BATCH_TUNE_ROOT/selected_batch.env"
 export OUTPUT_DIR=/tmp/plot_m3_simple_smoke
 export STEPS=3
 export SAVE_EVERY=500
@@ -121,7 +131,11 @@ nohup bash train_scripts/recipes/m3/train_m3_simple_4gpu.sh \
 echo $! | tee "$OUTPUT_DIR.launch.pid"
 ```
 
-默认是 4 卡、每卡 batch 1、无梯度积累、BF16、65 帧上下文、32 帧 KV cache、8 帧
-causal block。按本机实测，40k 约需 17.1 小时；换机器后以 smoke 实测重新估算。
+默认是 4 卡、无梯度积累、BF16、65 帧上下文、32 帧 KV cache、8 帧 causal block。
+本机每卡 batch 1 实测约 1.54 秒/step，因此 40k 约需 17.1 小时；换机器或 batch 后
+必须用 smoke 的实测速度重新估算。
+
+正式启动后应报告 Git commit、数据校验、GPU、per-GPU batch、effective batch、环境检查、
+smoke、W&B URL、PID、日志、checkpoint、当前 step、loss、显存、step 时间和预计完成时间。
 
 安全停止时只终止 `launch.pid` 对应的本次训练进程组，绝不能按 Python 名称批量 kill。
