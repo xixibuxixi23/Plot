@@ -61,7 +61,17 @@ python scripts/check_m3_environment.py \
   --checkpoint-staging-dir "$PLOT_CHECKPOINT_STAGING_DIR"
 ```
 
-若目标机器没有共享数据盘，可从源机器复制：
+若目标机器没有共享数据盘，优先从 Hugging Face 下载。脚本会逐 shard 校验
+SHA-256、解压并删除下载缓存，意外中断后可用同一条命令续传：
+
+```bash
+python scripts/download_dataset.py \
+  --output /fast/data/polis_two_player_fixed_skins_complete_20260917_360p \
+  --version fixed_skins_20260917 \
+  --splits train val_id
+```
+
+也可从源机器复制：
 
 ```bash
 rsync -aH --info=progress2 \
