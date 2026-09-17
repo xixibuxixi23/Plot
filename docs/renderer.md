@@ -53,8 +53,8 @@ multi-block reference adapters.  It keeps three explicit condition routes:
 3. four-view appearance is compressed to a small memory and injected once by
    ROI-biased reference attention.
 
-The canonical four-GPU from-scratch recipe is
-`train_scripts/recipes/m3/train_m3_simple_4gpu.sh`.  Its `4x2` token grid keeps
+The canonical portable from-scratch recipe is
+`train_scripts/recipes/m3/train_m3_simple.sh`.  Its `4x2` token grid keeps
 eight tokens per view, or 32 tokens per resident.  It does not load or overwrite
 the legacy 40k checkpoint.
 
@@ -147,7 +147,7 @@ settings, not frozen experimental choices.
 staged and verified checkpoints, and exact optimizer/model resume.
 
 Every 1,000 steps, rank zero runs five fixed val-ID deployment rollouts and
-uploads side-by-side GT / prediction / absolute-error MP4s to W&B. The probes
+uploads side-by-side GT / prediction MP4s to W&B. The probes
 cover two-player construction (S01), two-player motion (S02), PvE combat
 (S08), three-resident combat (S09), and mixed building/combat with NPCs (S10).
 Their exact episode, start frame and target resident are frozen in

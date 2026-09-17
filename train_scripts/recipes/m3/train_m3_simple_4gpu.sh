@@ -7,14 +7,21 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 cd "$repo_root"
 
-dataset_root=${PLOT_DATASET_ROOT:-/public/0_DATA/2_Avatar/zhizhou_share/rcz/textagent/data/releases/polis_two_player_fixed_skins_complete_20260917_360p}
+dataset_root=${PLOT_DATASET_ROOT:?Set PLOT_DATASET_ROOT to the downloaded release}
 output_dir=${OUTPUT_DIR:-outputs/m3_simple_fixed_skins_40k_20260917}
-staging_dir=${PLOT_CHECKPOINT_STAGING_DIR:-/tmp/plot_m3_simple_checkpoints}
+staging_dir=${PLOT_CHECKPOINT_STAGING_DIR:?Set PLOT_CHECKPOINT_STAGING_DIR}
 train_index=${M3_WINDOW_INDEX:-$dataset_root/derived/m3/validated/train_c65.pt}
 val_index=${M3_VAL_WINDOW_INDEX:-$dataset_root/derived/m3/validated/val_id_c65.pt}
 chunk_cache_root=${M3_CHUNK_CACHE_ROOT:-}
 python_bin=${PYTHON_BIN:-$repo_root/.venv/bin/python}
-nproc=${NPROC_PER_NODE:-4}
+: "${CUDA_VISIBLE_DEVICES:?Set CUDA_VISIBLE_DEVICES to the confirmed free GPUs}"
+IFS=',' read -r -a selected_gpus <<< "$CUDA_VISIBLE_DEVICES"
+selected_gpu_count=${#selected_gpus[@]}
+nproc=${NPROC_PER_NODE:-$selected_gpu_count}
+if [[ "$nproc" -ne "$selected_gpu_count" ]]; then
+  echo "NPROC_PER_NODE=$nproc does not match CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES" >&2
+  exit 1
+fi
 
 for required_path in \
   "$dataset_root" "$train_index" "$val_index" \
@@ -32,7 +39,7 @@ fi
 
 mkdir -p "$output_dir" "$staging_dir"
 
-CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-4,5,6,7} \
+CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES" \
 "$python_bin" -m torch.distributed.run --standalone --nproc-per-node="$nproc" \
   train_scripts/train_renderer.py \
   --dataset-root "$dataset_root" \
@@ -50,7 +57,7 @@ CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-4,5,6,7} \
   --actor-channels 32 \
   --context-frames 65 --cache-frames 32 --block-frames 8 \
   --target-views-per-window 1 \
-  --batch-size "${BATCH_SIZE:-1}" \
+  --batch-size "${BATCH_SIZE:-4}" \
   --workers "${WORKERS:-4}" \
   --steps "${STEPS:-40000}" \
   --precision bf16 --gradient-accumulation 1 \
