@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import cv2
 import torch
 
 from plot.checkpoint_io import staged_torch_save
@@ -71,6 +72,12 @@ def test_comparison_video_is_written(tmp_path):
     weight[:, :, 0, 0] = 5
     path = write_comparison_video(tmp_path / "probe.mp4", truth, prediction, weight)
     assert path.stat().st_size > 0
+    capture = cv2.VideoCapture(str(path))
+    try:
+        assert int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)) == 48
+        assert int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)) == 16
+    finally:
+        capture.release()
 
 
 def test_probe_uses_real_cached_64_frame_rollout(tmp_path):

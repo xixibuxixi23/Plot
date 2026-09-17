@@ -27,7 +27,7 @@ class RendererProbe:
 
 PROBE_SPECS = (
     ("construction", "S01", {"block_placed", "block_dug"}),
-    ("four_player", "S06", set()),
+    ("two_player_motion", "S02", set()),
     ("pve_combat", "S08", {"damage", "attack_contact"}),
     ("three_resident_combat", "S09", {"damage", "attack_contact"}),
     ("mixed_build_combat", "S10", {"damage"}),
@@ -116,7 +116,7 @@ def write_comparison_video(
     *,
     fps: float = 8.0,
 ) -> Path:
-    """Write GT | prediction | absolute error, with supervised regions outlined."""
+    """Write GT | prediction, with supervised regions outlined."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     gt = (ground_truth.detach().float().cpu().clamp(0, 1).permute(0, 2, 3, 1).numpy() * 255).astype(
@@ -127,12 +127,11 @@ def write_comparison_video(
     )
     weights = region_weight.detach().float().cpu().numpy()
     h, w = gt.shape[1:3]
-    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w * 3, h))
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w * 2, h))
     if not writer.isOpened():
         raise RuntimeError(f"OpenCV could not create video {path}")
     try:
         for index, (truth, estimate) in enumerate(zip(gt, pred)):
-            error = np.abs(truth.astype(np.int16) - estimate.astype(np.int16)).astype(np.uint8)
             mask = cv2.resize(
                 (weights[index, 0] > 1).astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST
             )
@@ -143,7 +142,6 @@ def write_comparison_video(
                 (
                     _label(cv2.cvtColor(truth, cv2.COLOR_RGB2BGR), f"GT t+{index + 1}"),
                     _label(estimate_bgr, "M3 rollout (yellow=entity region)"),
-                    _label(cv2.cvtColor(error, cv2.COLOR_RGB2BGR), "absolute RGB error"),
                 ),
                 axis=1,
             )
