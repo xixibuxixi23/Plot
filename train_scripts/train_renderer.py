@@ -111,6 +111,95 @@ def effective_auxiliary_loss_weights(args):
     return {name: float(getattr(args, name)) for name in AUXILIARY_LOSS_WEIGHT_NAMES}
 
 
+def load_renderer_resume(
+    model,
+    optimizer,
+    checkpoint,
+    item_vocabulary,
+    *,
+    allow_item_vocabulary_extension=False,
+):
+    """Strictly resume M3, optionally appending new item embedding rows.
+
+    Item IDs already present in the checkpoint may never be renamed or moved.
+    New IDs retain the model's normal random initialization, while the Adam
+    moments for those rows start at zero. Every other model tensor and all
+    scalar optimizer state remain an exact resume.
+    """
+    embedding_key = "resident_encoder.item_embedder.weight"
+    saved_model = dict(checkpoint["model"])
+    saved_embedding = saved_model[embedding_key]
+    current_embedding = model.state_dict()[embedding_key]
+    checkpoint_vocabulary = checkpoint.get("config", {}).get("item_vocabulary")
+
+    if checkpoint_vocabulary is not None:
+        changed = {
+            name: (index, item_vocabulary.get(name))
+            for name, index in checkpoint_vocabulary.items()
+            if item_vocabulary.get(name) != index
+        }
+        if changed:
+            raise RuntimeError(
+                "item vocabulary changed existing checkpoint IDs: "
+                f"{changed}"
+            )
+
+    if saved_embedding.shape == current_embedding.shape:
+        model.load_state_dict(saved_model, strict=True)
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        return {"item_vocabulary_extended": False, "new_items": {}}
+
+    compatible_shape = (
+        saved_embedding.ndim == current_embedding.ndim
+        and saved_embedding.shape[1:] == current_embedding.shape[1:]
+        and saved_embedding.shape[0] < current_embedding.shape[0]
+    )
+    if not allow_item_vocabulary_extension or not compatible_shape:
+        raise RuntimeError(
+            "resume item embedding shape differs: "
+            f"checkpoint={tuple(saved_embedding.shape)} "
+            f"current={tuple(current_embedding.shape)}; pass "
+            "--allow-item-vocabulary-extension only when new items were appended"
+        )
+    if checkpoint_vocabulary is None:
+        raise RuntimeError(
+            "cannot verify an item-vocabulary extension because the checkpoint "
+            "does not record config.item_vocabulary"
+        )
+    new_items = {
+        name: index
+        for name, index in item_vocabulary.items()
+        if name not in checkpoint_vocabulary
+    }
+    if not new_items or any(
+        index < saved_embedding.shape[0] for index in new_items.values()
+    ):
+        raise RuntimeError(
+            "new item vocabulary entries must use IDs appended after all "
+            "checkpoint embedding rows"
+        )
+
+    expanded_embedding = current_embedding.clone()
+    expanded_embedding[: saved_embedding.shape[0]].copy_(saved_embedding)
+    saved_model[embedding_key] = expanded_embedding
+    model.load_state_dict(saved_model, strict=True)
+    optimizer.load_state_dict(checkpoint["optimizer"])
+
+    embedding_parameter = dict(model.named_parameters())[embedding_key]
+    optimizer_state = optimizer.state.get(embedding_parameter, {})
+    for name, value in list(optimizer_state.items()):
+        if torch.is_tensor(value) and value.shape == saved_embedding.shape:
+            expanded = value.new_zeros(current_embedding.shape)
+            expanded[: saved_embedding.shape[0]].copy_(value)
+            optimizer_state[name] = expanded
+    return {
+        "item_vocabulary_extended": True,
+        "old_embedding_rows": saved_embedding.shape[0],
+        "new_embedding_rows": current_embedding.shape[0],
+        "new_items": dict(sorted(new_items.items(), key=lambda pair: pair[1])),
+    }
+
+
 def _start_profile_range(enabled, device):
     if not enabled:
         return None
@@ -193,9 +282,26 @@ def main():
     )
     parser.add_argument("--resume")
     parser.add_argument(
+        "--allow-item-vocabulary-extension",
+        action="store_true",
+        help=(
+            "Allow --resume when the dataset only appends new item IDs; preserves "
+            "old embedding rows and optimizer moments and zero-initializes moments "
+            "for new rows"
+        ),
+    )
+    parser.add_argument(
         "--deep-condition-reinjection",
         action="store_true",
         help="Reinject aligned raster, actor, action, resident state, and HUD conditions at every DiT block",
+    )
+    parser.add_argument(
+        "--simple-m3",
+        action="store_true",
+        help=(
+            "Use one fused scene encoder, target-state AdaLN, and one compact "
+            "player-reference attention"
+        ),
     )
     parser.add_argument(
         "--view-aware-appearance",
@@ -380,6 +486,7 @@ def main():
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--wandb-entity")
     parser.add_argument("--wandb-project", default="plot-m3")
     parser.add_argument("--wandb-name")
     parser.add_argument("--wandb-mode", choices=("online", "offline", "disabled"), default="online")
@@ -429,6 +536,19 @@ def main():
         parser.error(
             "--unified-player-reference replaces all legacy appearance/reference flags"
         )
+    if args.simple_m3 and (
+        args.deep_condition_reinjection
+        or args.view_aware_appearance
+        or args.detail_preserving_appearance
+        or args.entity_reference_attention
+        or args.geometry_aware_player_reference
+        or args.unified_reference_reinject_blocks
+    ):
+        parser.error(
+            "--simple-m3 is incompatible with legacy, geometry-aware, or repeated adapters"
+        )
+    if args.simple_m3 and args.actor_channels < 3:
+        parser.error("--simple-m3 requires --actor-channels >= 3")
     if args.unified_reference_reinject_blocks and not args.unified_player_reference:
         parser.error(
             "--unified-reference-reinject-blocks requires --unified-player-reference"
@@ -650,13 +770,14 @@ def main():
         view_aware_appearance=args.view_aware_appearance,
         detail_preserving_appearance=args.detail_preserving_appearance,
         entity_reference_attention=args.entity_reference_attention,
-        unified_player_reference=args.unified_player_reference,
+        unified_player_reference=args.unified_player_reference or args.simple_m3,
         player_reference_grid_size=tuple(args.player_reference_token_grid),
         player_reference_position_encoding=args.player_reference_position_encoding,
         geometry_aware_player_reference=args.geometry_aware_player_reference,
         unified_reference_reinject_blocks=tuple(
             args.unified_reference_reinject_blocks
         ),
+        simple_conditioning=args.simple_m3,
     )
     with torch.cuda.device(device):
         raw_model = Renderer(cfg).to(device).train()
@@ -753,9 +874,16 @@ def main():
     start_step = 0
     if args.resume:
         checkpoint = torch.load(args.resume, map_location="cpu", weights_only=False)
-        raw_model.load_state_dict(checkpoint["model"], strict=True)
-        optimizer.load_state_dict(checkpoint["optimizer"])
+        resume_report = load_renderer_resume(
+            raw_model,
+            optimizer,
+            checkpoint,
+            dataset.item_vocabulary,
+            allow_item_vocabulary_extension=args.allow_item_vocabulary_extension,
+        )
         start_step = int(checkpoint["step"])
+        if rank == 0:
+            print(json.dumps({"resume": str(args.resume), **resume_report}))
     elif args.warm_start:
         checkpoint = torch.load(args.warm_start, map_location="cpu", weights_only=False)
         warm_state = dict(checkpoint["model"])
@@ -838,6 +966,7 @@ def main():
         import wandb
 
         run = wandb.init(
+            entity=args.wandb_entity,
             project=args.wandb_project,
             name=args.wandb_name,
             mode=args.wandb_mode,
@@ -858,7 +987,15 @@ def main():
             },
         )
         (output / "wandb_run.json").write_text(
-            json.dumps({"id": run.id, "url": run.url, "project": args.wandb_project}, indent=2)
+            json.dumps(
+                {
+                    "id": run.id,
+                    "url": run.url,
+                    "entity": args.wandb_entity,
+                    "project": args.wandb_project,
+                },
+                indent=2,
+            )
         )
     val_loader = None
     probes = []

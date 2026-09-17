@@ -24,6 +24,7 @@ from plot.training.renderer_trainer import (
 )
 from train_scripts.train_renderer import (
     effective_auxiliary_loss_weights,
+    load_renderer_resume,
     use_counterfactual_step,
 )
 
@@ -350,6 +351,52 @@ def test_unified_player_reference_is_the_only_appearance_route_and_uses_all_view
     unified(x, time, cond).square().mean().backward()
     grad = unified.core.unified_reference_adapter.to_output.weight.grad
     assert grad is not None and grad.abs().sum() > 0
+
+
+def test_simple_m3_has_one_scene_path_and_one_compact_appearance_path():
+    base = tiny_model()
+    model = Renderer(replace(
+        base.cfg,
+        simple_conditioning=True,
+        unified_player_reference=True,
+        player_reference_grid_size=(4, 2),
+    )).train()
+
+    assert model.core.scene_condition_embedder is not None
+    assert model.core.actor_condition_embedder is None
+    assert model.core.condition_reinjectors is None
+    assert model.core.appearance_reinjectors is None
+    assert model.core.entity_reference_adapters is None
+    assert model.core.unified_reference_reinject_blocks == ()
+
+    cond = conditions(9)
+    encoded = model.encode_conditions(cond)
+    assert encoded["actor_spatial_condition"].shape == (1, 9, 4, 4, 4)
+    assert encoded["unified_reference_tokens"].shape == (1, 2, 4, 8, 256)
+    assert "unified_reference_view_weights" not in encoded
+    assert "unified_reference_local_coordinates" not in encoded
+
+    # The second resident's action remains attached to its projected region.
+    changed = {name: value.clone() if torch.is_tensor(value) else value
+               for name, value in cond.items()}
+    changed["action"][:, :, 1, 0] = 1
+    changed_spatial = model.encode_conditions(changed)["actor_spatial_condition"]
+    assert not torch.allclose(encoded["actor_spatial_condition"], changed_spatial)
+
+    with torch.no_grad():
+        model.core.final_layer.linear.weight.normal_(std=.03)
+        model.core.unified_reference_adapter.to_output.weight.normal_(std=.02)
+        for block in model.core.blocks:
+            block.s_adaLN_modulation[-1].weight.normal_(std=.03)
+            block.t_adaLN_modulation[-1].weight.normal_(std=.03)
+    output = model(torch.randn(1, 9, 16, 4, 4), torch.rand(1, 9), cond)
+    output.square().mean().backward()
+    assert model.core.scene_condition_embedder.weight.grad.abs().sum() > 0
+    assert model.resident_encoder.actor_mlp[0].weight.grad.abs().sum() > 0
+    assert model.reference_encoder.encoder[0].weight.grad.abs().sum() > 0
+
+    with pytest.raises(ValueError, match="one scene input"):
+        Renderer(replace(model.cfg, unified_reference_reinject_blocks=(0,)))
 
 
 def test_geometry_aware_unified_reference_uses_view_and_local_coordinates():
@@ -739,6 +786,71 @@ def test_mixed_counterfactual_schedule_is_stable_and_close_to_requested_ratio():
     assert 0.18 < sum(first) / len(first) < 0.22
     assert not any(use_counterfactual_step(step, 0.0, 17) for step in range(10))
     assert all(use_counterfactual_step(step, 1.0, 17) for step in range(10))
+
+
+def test_resume_can_append_item_embedding_and_adam_rows():
+    old = Renderer(RendererArgs(
+        3, 8, input_h=4, input_w=4, hidden_size=32, depth=2,
+        num_heads=4, voxel_channels=4, condition_dim=16, actor_channels=4,
+        context_frames=65, cache_frames=16, gradient_checkpointing=False,
+        gpu_rasterizer=False,
+    ))
+    old_optimizer = torch.optim.AdamW(old.parameters(), lr=1e-4)
+    for parameter in old.parameters():
+        parameter.grad = torch.ones_like(parameter)
+    old_optimizer.step()
+    checkpoint = {
+        "model": old.state_dict(),
+        "optimizer": old_optimizer.state_dict(),
+        "config": {"item_vocabulary": {f"item_{index}": index for index in range(1, 8)}},
+        "step": 12,
+    }
+
+    torch.manual_seed(123)
+    extended = Renderer(RendererArgs(
+        3, 9, input_h=4, input_w=4, hidden_size=32, depth=2,
+        num_heads=4, voxel_channels=4, condition_dim=16, actor_channels=4,
+        context_frames=65, cache_frames=16, gradient_checkpointing=False,
+        gpu_rasterizer=False,
+    ))
+    new_row_before_resume = extended.resident_encoder.item_embedder.weight[8].detach().clone()
+    extended_optimizer = torch.optim.AdamW(extended.parameters(), lr=1e-4)
+    report = load_renderer_resume(
+        extended,
+        extended_optimizer,
+        checkpoint,
+        {**checkpoint["config"]["item_vocabulary"], "new_item": 8},
+        allow_item_vocabulary_extension=True,
+    )
+
+    assert report["new_items"] == {"new_item": 8}
+    torch.testing.assert_close(
+        extended.resident_encoder.item_embedder.weight[:8],
+        old.resident_encoder.item_embedder.weight,
+    )
+    torch.testing.assert_close(
+        extended.resident_encoder.item_embedder.weight[8], new_row_before_resume,
+    )
+    state = extended_optimizer.state[extended.resident_encoder.item_embedder.weight]
+    assert state["exp_avg"].shape == (9, 64)
+    assert state["exp_avg_sq"].shape == (9, 64)
+    assert torch.count_nonzero(state["exp_avg"][8]) == 0
+    assert torch.count_nonzero(state["exp_avg_sq"][8]) == 0
+    for parameter in extended.parameters():
+        parameter.grad = torch.ones_like(parameter)
+    extended_optimizer.step()
+
+
+def test_resume_rejects_existing_item_id_changes():
+    model = tiny_model()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    checkpoint = {
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "config": {"item_vocabulary": {"pick": 1}},
+    }
+    with pytest.raises(RuntimeError, match="changed existing checkpoint IDs"):
+        load_renderer_resume(model, optimizer, checkpoint, {"pick": 2})
 
 
 def test_counterfactual_dataset_canonicalizes_voxels_but_keeps_references():

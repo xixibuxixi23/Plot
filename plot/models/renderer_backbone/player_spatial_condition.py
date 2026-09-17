@@ -8,11 +8,12 @@ import torch.nn.functional as F
 
 
 class PlayerSpatialCondition(nn.Module):
-    """Project every other player to a soft screen-space rectangle.
+    """Project every other player and its features to a soft screen-space box.
 
-    The branch only needs state already present in the dataset plus the existing
-    four-view identity appearance embedding. It deliberately does not model a
-    skeleton or require body-part annotations.
+    ``source_embedding`` may be static ``[B,A,D]`` appearance features (the
+    legacy renderer) or frame-aligned ``[B,T,A,D]`` state features (M3-Simple).
+    The latter keeps each resident's action/state attached to its projected
+    location instead of globally pooling all other residents.
     """
 
     def __init__(
@@ -26,15 +27,21 @@ class PlayerSpatialCondition(nn.Module):
         edge_sharpness: float = 2.0,
     ) -> None:
         super().__init__()
-        if output_channels < 3:
-            raise ValueError("output_channels must be at least 3")
+        if output_channels < 2:
+            raise ValueError("output_channels must be at least 2")
+        if appearance_dim < 0:
+            raise ValueError("appearance_dim must be nonnegative")
         self.output_channels = output_channels
         self.height = height
         self.width = width
         self.player_height = player_height
         self.player_aspect = player_aspect
         self.edge_sharpness = edge_sharpness
-        self.appearance_projection = nn.Linear(appearance_dim, output_channels - 2, bias=False)
+        self.appearance_projection = (
+            nn.Linear(appearance_dim, output_channels - 2, bias=False)
+            if appearance_dim
+            else None
+        )
 
     def _project(self, points, camera_position, forward, right, down, tan_half_fov_x):
         relative = points - camera_position
@@ -47,7 +54,7 @@ class PlayerSpatialCondition(nn.Module):
         v = (camera_y / safe_depth / tan_half_fov_y + 1.0) * (self.height - 1) / 2.0
         return u, v, depth
 
-    def forward(self, cond: dict, appearance_embedding: torch.Tensor) -> torch.Tensor:
+    def forward(self, cond: dict, source_embedding: torch.Tensor) -> torch.Tensor:
         position = cond["player_position"]
         camera_position = cond["camera_position"]
         camera_direction = cond["camera_direction"]
@@ -57,8 +64,17 @@ class PlayerSpatialCondition(nn.Module):
         bsz, timesteps, agents, _ = position.shape
         if camera_position.shape != position.shape or camera_direction.shape != position.shape:
             raise ValueError("camera_position and camera_direction must match player_position")
-        if appearance_embedding.shape[:2] != (bsz, agents):
-            raise ValueError("appearance_embedding must have shape [B,A,D]")
+        if source_embedding.ndim == 3:
+            if source_embedding.shape[:2] != (bsz, agents):
+                raise ValueError("static source embedding must have shape [B,A,D]")
+            source_embedding = source_embedding[:, None].expand(-1, timesteps, -1, -1)
+        elif source_embedding.ndim == 4:
+            if source_embedding.shape[:3] != (bsz, timesteps, agents):
+                raise ValueError(
+                    "frame-aligned source embedding must have shape [B,T,A,D]"
+                )
+        else:
+            raise ValueError("source embedding must be [B,A,D] or [B,T,A,D]")
         if player_valid is None:
             player_valid = torch.ones((bsz, timesteps, agents), device=position.device, dtype=torch.bool)
         else:
@@ -107,16 +123,12 @@ class PlayerSpatialCondition(nn.Module):
 
         inverse_depth = 1.0 / (1.0 + depth.clamp_min(0.0))
 
-        appearance = torch.tanh(self.appearance_projection(appearance_embedding.to(dtype)))
-        appearance = appearance[:, None, None].expand(-1, timesteps, agents, -1, -1)
-        source_features = torch.cat(
-            (
-                torch.ones_like(depth)[..., None],
-                inverse_depth[..., None],
-                appearance,
-            ),
-            dim=-1,
-        )
+        source_features = [torch.ones_like(depth)[..., None], inverse_depth[..., None]]
+        if self.appearance_projection is not None:
+            projected = torch.tanh(self.appearance_projection(source_embedding.to(dtype)))
+            projected = projected[:, :, None].expand(-1, -1, agents, -1, -1)
+            source_features.append(projected)
+        source_features = torch.cat(source_features, dim=-1)
         spatial = (mask[..., None, :, :] * source_features[..., :, None, None]).sum(dim=3)
         return spatial.contiguous()
 

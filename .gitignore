@@ -8,6 +8,10 @@ outputs/
 wandb/
 *.log
 *.tmp
+*.orig
+.env
+.env.*
+!.env.example
 checkpoints/m1/
 checkpoints/m2/
 checkpoints/m3/

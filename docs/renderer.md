@@ -41,6 +41,23 @@ requires M1 to fill all unknown cells first.
 
 ## Training
 
+### M3-Simple
+
+New full retraining should use `--simple-m3`.  This architecture removes the
+legacy deep-condition, warped-appearance, entity-reference, geometry-aware and
+multi-block reference adapters.  It keeps three explicit condition routes:
+
+1. voxel raster and per-resident state are projected into screen space and
+   fused by one scene encoder;
+2. the target resident's action/state modulates the DiT through AdaLN;
+3. four-view appearance is compressed to a small memory and injected once by
+   ROI-biased reference attention.
+
+The canonical four-GPU from-scratch recipe is
+`train_scripts/recipes/m3/train_m3_simple_4gpu.sh`.  Its `4x2` token grid keeps
+eight tokens per view, or 32 tokens per resident.  It does not load or overwrite
+the legacy 40k checkpoint.
+
 Use the existing PLOT CUDA environment. The renderer additionally requires
 `einops`, `timm`, `loguru`, `safetensors`, the existing 2DAction-compatible
 `utils3d`, and `nvdiffrast`. CPU contract tests use supplied depth samples; raw
@@ -131,7 +148,7 @@ staged and verified checkpoints, and exact optimizer/model resume.
 
 Every 1,000 steps, rank zero runs five fixed val-ID deployment rollouts and
 uploads side-by-side GT / prediction / absolute-error MP4s to W&B. The probes
-cover two-player construction (S01), four-player motion (S06), PvE combat
+cover two-player construction (S01), two-player motion (S02), PvE combat
 (S08), three-resident combat (S09), and mixed building/combat with NPCs (S10).
 Their exact episode, start frame and target resident are frozen in
 `visualizations/probes.json`; the model sees one known frame and generates the

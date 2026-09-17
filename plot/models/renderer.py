@@ -45,6 +45,53 @@ class RendererArgs:
     player_reference_position_encoding: bool = False
     geometry_aware_player_reference: bool = False
     unified_reference_reinject_blocks: tuple[int, ...] = ()
+    simple_conditioning: bool = False
+
+
+class SimpleResidentConditionEncoder(nn.Module):
+    """Encode target state globally and other-resident state spatially.
+
+    Appearance is intentionally absent here: it has one route through the
+    compact reference memory. Other residents retain their individual action
+    and state until after screen-space projection.
+    """
+
+    def __init__(self, cfg: RendererArgs):
+        super().__init__()
+        if cfg.actor_channels < 3:
+            raise ValueError("M3-Simple actor_channels must be at least 3")
+        self.max_agents = cfg.max_agents
+        self.actor_feature_dim = cfg.actor_channels - 2
+        self.item_embedder = nn.Embedding(cfg.item_vocab_size, 64)
+        self.kind_embedder = nn.Embedding(4, 16)
+        # hp, sin/cos(yaw,pitch), four event cues, held item, resident kind.
+        local_dim = 1 + 4 + 4 + 64 + 16
+        self.actor_mlp = nn.Sequential(
+            nn.Linear(local_dim + 23, cfg.condition_dim),
+            nn.SiLU(),
+            nn.Linear(cfg.condition_dim, self.actor_feature_dim),
+        )
+        self.target_mlp = nn.Sequential(
+            nn.Linear(local_dim + 3, cfg.condition_dim),
+            nn.SiLU(),
+            nn.Linear(cfg.condition_dim, cfg.condition_dim),
+            nn.LayerNorm(cfg.condition_dim),
+        )
+
+    def forward(self, cond):
+        position = cond["player_position"]
+        if position.shape[2] > self.max_agents:
+            raise ValueError("resident count exceeds max_agents")
+        hp = cond["hp"][..., None] / 20.0
+        angles = cond["yaw_pitch"]
+        local = torch.cat(
+            (hp, angles.sin(), angles.cos(), cond["event_cues"],
+             self.item_embedder(cond["held_item"].long()),
+             self.kind_embedder(cond["resident_type"].long())), dim=-1)
+        target = self.target_mlp(torch.cat((local, cond["camera_relative"]), dim=-1))
+        actor = self.actor_mlp(torch.cat((local, cond["action"]), dim=-1))
+        valid = cond["player_valid"].to(actor.dtype)[..., None]
+        return target * valid, actor * valid
 
 
 class ResidentConditionEncoder(MultiAgentRenderConditionEncoder):
@@ -133,6 +180,17 @@ class Renderer(nn.Module):
             raise ValueError(
                 "unified player reference replaces all legacy appearance/reference paths"
             )
+        if cfg.simple_conditioning and not cfg.unified_player_reference:
+            raise ValueError("M3-Simple requires the single unified player reference")
+        if cfg.simple_conditioning and (
+            cfg.deep_condition_reinjection
+            or cfg.geometry_aware_player_reference
+            or cfg.unified_reference_reinject_blocks
+        ):
+            raise ValueError(
+                "M3-Simple has one scene input and one appearance injection; "
+                "deep/geometry-aware/repeated adapters are not supported"
+            )
         if cfg.geometry_aware_player_reference and not cfg.unified_player_reference:
             raise ValueError(
                 "geometry-aware player reference requires unified player reference"
@@ -143,8 +201,15 @@ class Renderer(nn.Module):
             raise ValueError("M3 context after the first frame must contain complete blocks")
         self.cfg = cfg
         self.voxel_embedder = nn.Embedding(cfg.num_block_classes + 1, cfg.voxel_channels)
-        self.resident_encoder = ResidentConditionEncoder(cfg)
-        self.spatial_encoder = PlayerSpatialCondition(128, cfg.actor_channels, cfg.input_h, cfg.input_w)
+        self.resident_encoder = (
+            SimpleResidentConditionEncoder(cfg)
+            if cfg.simple_conditioning
+            else ResidentConditionEncoder(cfg)
+        )
+        spatial_feature_dim = cfg.actor_channels - 2 if cfg.simple_conditioning else 128
+        self.spatial_encoder = PlayerSpatialCondition(
+            spatial_feature_dim, cfg.actor_channels, cfg.input_h, cfg.input_w
+        )
         self.appearance_spatial_encoder = (
             ViewAwarePlayerAppearance(cfg.input_h, cfg.input_w)
             if cfg.view_aware_appearance
@@ -185,6 +250,7 @@ class Renderer(nn.Module):
             unified_reference_grid_size=cfg.player_reference_grid_size,
             geometry_aware_player_reference=cfg.geometry_aware_player_reference,
             unified_reference_reinject_blocks=cfg.unified_reference_reinject_blocks,
+            simple_conditioning=cfg.simple_conditioning,
             gradient_checkpointing=cfg.gradient_checkpointing,
             aggregation_config={} if cfg.gpu_rasterizer else None)
 
@@ -196,10 +262,10 @@ class Renderer(nn.Module):
         if {"instance_mask", "entity_mask", "weapon_texture", "crop_anchor"} & cond.keys():
             raise ValueError("supervision masks, weapon textures and crop anchors are not neural inputs")
         target = cond["target_agent"].long()
-        extra, appearance = self.resident_encoder(cond)
+        extra, actor_features = self.resident_encoder(cond)
         spatial_cond = dict(cond, camera_position=cond["player_position"] + cond["camera_relative"],
                             camera=cond["fov_x"][..., None])
-        spatial = self.spatial_encoder(spatial_cond, appearance)
+        spatial = self.spatial_encoder(spatial_cond, actor_features)
         result = {
             "action": self.select(cond["action"], target),
             "extra_condition": self.select(extra, target),
