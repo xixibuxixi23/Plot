@@ -14,6 +14,7 @@
 - 使用 `checkpoints/m3_backbone/model.safetensors` 初始化旧 2daction 去噪主干，
   保留其 QK RMSNorm；扩展 joint patch embedder 时原 latent/voxel 通道原样复制，
   新增 player/appearance 通道以零权重接入，随后全量联合训练；
+- 全网络继续训练，学习率使用旧 2daction stage-2 配方的 `3e-5`；
 - BF16、65 帧上下文、32 帧 KV cache、8 帧 causal block；
 - M3-Simple 不使用额外的 `condition_mask` embedding；首帧和已完成历史以 `τ=0`
   表示，保留 block-causal attention mask 和动作窗口起点标记；

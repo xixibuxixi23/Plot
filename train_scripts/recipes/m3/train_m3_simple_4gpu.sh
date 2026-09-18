@@ -69,7 +69,7 @@ CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES" \
   --loss-mode flow \
   --latent-entity-region-upweight 0 \
   --latent-player-region-upweight 0 \
-  --lr "${LR:-1e-4}" \
+  --lr "${LR:-3e-5}" \
   --save-every "${SAVE_EVERY:-500}" \
   --validate-every "${VALIDATE_EVERY:-1000}" \
   --visualize-every "${VISUALIZE_EVERY:-1000}" \
