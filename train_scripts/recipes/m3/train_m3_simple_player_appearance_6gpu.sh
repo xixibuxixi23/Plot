@@ -69,7 +69,8 @@ CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES" \
   --flow-loss-weight 0 \
   --latent-entity-region-upweight 0 \
   --latent-player-region-upweight 0 \
-  --pixel-loss-frames "${PIXEL_LOSS_FRAMES:-3}" \
+  --pixel-loss-frames "${PIXEL_LOSS_FRAMES:-1}" \
+  --pixel-frame-selection player \
   --entity-pixel-l1-weight 0 \
   --entity-pixel-edge-weight 0 \
   --player-pixel-l1-weight "${PLAYER_PIXEL_L1_WEIGHT:-1}" \

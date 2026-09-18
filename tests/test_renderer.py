@@ -1169,6 +1169,21 @@ def test_pixel_frame_selection_includes_minimum_target_health():
     torch.testing.assert_close(target_hp[0], hp[0, :, 1])
 
 
+def test_pixel_frame_selection_can_target_visible_player():
+    entity = torch.zeros(2, 5, 1, 4, 4)
+    player = torch.zeros_like(entity)
+    player[0, 3, :, 1:3, 1:3] = 1
+    indices, _ = select_renderer_pixel_frames(
+        entity,
+        frames_per_sample=1,
+        player_region_mask=player,
+        selection_mode="player",
+        generator=torch.Generator().manual_seed(7),
+    )
+    assert indices[0, 0].item() == 3
+    assert 1 <= indices[1, 0].item() < 5
+
+
 def test_combined_renderer_loss_can_disable_pixel_decoder():
     class Codec:
         def decode_for_loss(self, latent, chunk_size=1):
@@ -1198,7 +1213,8 @@ def test_renderer_loss_can_disable_flow_for_pixel_only_adaptation():
     terms = renderer_training_losses(
         model, Codec(), clean, conditions(65), rgb, mask,
         player_region_mask=mask,
-        frames_per_sample=3,
+        frames_per_sample=1,
+        pixel_frame_selection="player",
         flow_loss_weight=0,
         entity_pixel_l1_weight=0,
         entity_pixel_edge_weight=0,

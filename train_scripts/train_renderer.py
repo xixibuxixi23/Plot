@@ -479,6 +479,12 @@ def main():
         default=2,
         help="Entity-rich and HP-informative future frames decoded per target view",
     )
+    parser.add_argument(
+        "--pixel-frame-selection",
+        choices=("mixed", "player"),
+        default="mixed",
+        help="Choose decoded supervision frames from mixed signals or visible-player masks",
+    )
     parser.add_argument("--entity-pixel-l1-weight", type=float, default=0.5)
     parser.add_argument("--entity-pixel-edge-weight", type=float, default=0.2)
     parser.add_argument("--player-pixel-l1-weight", type=float, default=0.0)
@@ -1089,6 +1095,7 @@ def main():
     loss_kwargs = {
         "flow_loss_weight": args.flow_loss_weight,
         "frames_per_sample": args.pixel_loss_frames,
+        "pixel_frame_selection": args.pixel_frame_selection,
         "entity_pixel_l1_weight": auxiliary_weights["entity_pixel_l1_weight"],
         "entity_pixel_edge_weight": auxiliary_weights["entity_pixel_edge_weight"],
         "player_pixel_l1_weight": auxiliary_weights["player_pixel_l1_weight"],
