@@ -14,6 +14,7 @@ from .renderer_backbone.player_spatial_condition import (
     ViewAwarePlayerAppearance,
     PlayerReferenceEncoder,
     PlayerReferenceLayout,
+    ROIAppearanceProjector,
 )
 
 
@@ -188,7 +189,7 @@ class Renderer(nn.Module):
             or cfg.unified_reference_reinject_blocks
         ):
             raise ValueError(
-                "M3-Simple has one scene input and one appearance injection; "
+                "M3-Simple has one joint spatial input before the DiT; "
                 "deep/geometry-aware/repeated adapters are not supported"
             )
         if cfg.geometry_aware_player_reference and not cfg.unified_player_reference:
@@ -229,11 +230,27 @@ class Renderer(nn.Module):
             PlayerReferenceLayout(cfg.input_h, cfg.input_w)
             if use_reference_tokens else None
         )
+        self.roi_appearance_projector = (
+            ROIAppearanceProjector(
+                reference_dim=256,
+                actor_dim=spatial_feature_dim,
+                output_channels=32,
+                height=cfg.input_h,
+                width=cfg.input_w,
+            )
+            if cfg.simple_conditioning
+            else None
+        )
         self.core = FrameDepthStackPixelDiT(
             input_h=cfg.input_h, input_w=cfg.input_w, in_channels=cfg.in_channels,
             hidden_size=cfg.hidden_size, depth=cfg.depth, num_heads=cfg.num_heads,
             raster_cond_shape=(cfg.voxel_channels, cfg.input_h, cfg.input_w),
             extra_condition_dim=cfg.condition_dim, actor_condition_dim=cfg.actor_channels,
+            roi_appearance_dim=(
+                self.roi_appearance_projector.output_channels
+                if self.roi_appearance_projector is not None
+                else 0
+            ),
             context_window_size=cfg.context_frames, cache_window_size=cfg.cache_frames,
             voxel_dim=48, is_causal=True, causal_block_size=cfg.block_frames,
             use_condition_mask=True,
@@ -246,7 +263,9 @@ class Renderer(nn.Module):
             ),
             detail_preserving_appearance=cfg.detail_preserving_appearance,
             entity_reference_dim=256 if cfg.entity_reference_attention else 0,
-            unified_reference_dim=256 if cfg.unified_player_reference else 0,
+            unified_reference_dim=(
+                256 if cfg.unified_player_reference and not cfg.simple_conditioning else 0
+            ),
             unified_reference_grid_size=cfg.player_reference_grid_size,
             geometry_aware_player_reference=cfg.geometry_aware_player_reference,
             unified_reference_reinject_blocks=cfg.unified_reference_reinject_blocks,
@@ -287,7 +306,21 @@ class Renderer(nn.Module):
             roi, view_weights, local_coordinates = self.reference_layout(
                 spatial_cond, target
             )
-            if self.cfg.unified_player_reference:
+            if self.cfg.simple_conditioning:
+                valid = cond.get("player_appearance_valid")
+                if valid is None:
+                    valid = torch.ones(
+                        reference_tokens.shape[:3], device=reference_tokens.device,
+                        dtype=torch.bool,
+                    )
+                result["roi_appearance_condition"] = self.roi_appearance_projector(
+                    reference_tokens,
+                    roi,
+                    local_coordinates,
+                    actor_features,
+                    valid.bool(),
+                )
+            elif self.cfg.unified_player_reference:
                 result["unified_reference_tokens"] = reference_tokens
                 result["unified_reference_roi"] = roi
                 if self.cfg.geometry_aware_player_reference:

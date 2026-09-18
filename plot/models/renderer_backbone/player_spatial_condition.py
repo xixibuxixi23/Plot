@@ -428,3 +428,103 @@ class PlayerReferenceEncoder(nn.Module):
         if valid is not None:
             encoded *= valid.to(encoded.dtype)[...,None,None]
         return encoded
+
+
+class ROIAppearanceProjector(nn.Module):
+    """Query four separate reference views into a target-space feature map.
+
+    Geometry supplies queries and a soft ROI only. Reference views are neither
+    selected nor blended: each view is attended independently and occupies its
+    own output channel group before the joint video/voxel patch embedding.
+    """
+
+    def __init__(
+        self,
+        reference_dim: int,
+        actor_dim: int,
+        output_channels: int,
+        height: int,
+        width: int,
+        attention_dim: int = 64,
+    ) -> None:
+        super().__init__()
+        if output_channels % 4:
+            raise ValueError("ROI appearance channels must be divisible by four")
+        self.output_channels = int(output_channels)
+        self.height, self.width = int(height), int(width)
+        self.channels_per_view = self.output_channels // 4
+        self.reference_norm = nn.LayerNorm(reference_dim)
+        self.query = nn.Sequential(
+            nn.Linear(actor_dim + 4, attention_dim),
+            nn.SiLU(),
+            nn.Linear(attention_dim, attention_dim),
+        )
+        self.key = nn.Linear(reference_dim, attention_dim, bias=False)
+        self.value = nn.Linear(reference_dim, self.channels_per_view)
+        self.scale = attention_dim ** -0.5
+
+        screen_y, screen_x = torch.meshgrid(
+            torch.linspace(-1, 1, self.height),
+            torch.linspace(-1, 1, self.width),
+            indexing="ij",
+        )
+        self.register_buffer(
+            "screen_coordinates",
+            torch.stack((screen_x, screen_y), dim=-1),
+            persistent=False,
+        )
+
+    def forward(
+        self,
+        reference: torch.Tensor,
+        roi: torch.Tensor,
+        local_coordinates: torch.Tensor,
+        actor_features: torch.Tensor,
+        valid: torch.Tensor,
+    ) -> torch.Tensor:
+        # reference [B,A,4,N,R], roi [B,T,A,H,W], actor [B,T,A,C]
+        if reference.ndim != 5 or reference.shape[2] != 4:
+            raise ValueError("reference must be [B,A,4,N,D]")
+        bsz, agents, views = reference.shape[:3]
+        if roi.ndim != 5 or roi.shape[0] != bsz or roi.shape[2:] != (
+            agents, self.height, self.width
+        ):
+            raise ValueError("ROI must be [B,T,A,H,W]")
+        frames = roi.shape[1]
+        expected_coordinates = (bsz, frames, agents, self.height, self.width, 2)
+        if local_coordinates.shape != expected_coordinates:
+            raise ValueError(
+                f"local coordinates must have shape {expected_coordinates}"
+            )
+        if actor_features.shape[:3] != (bsz, frames, agents):
+            raise ValueError("actor features must be [B,T,A,C]")
+        if valid.shape != (bsz, agents, views):
+            raise ValueError("reference valid mask must be [B,A,4]")
+
+        screen = self.screen_coordinates.to(
+            device=roi.device, dtype=roi.dtype
+        )[None, None, None].expand(bsz, frames, agents, -1, -1, -1)
+        actor = actor_features.to(roi.dtype)[..., None, None, :].expand(
+            -1, -1, -1, self.height, self.width, -1
+        )
+        query = self.query(
+            torch.cat((screen, local_coordinates.to(roi.dtype), actor), dim=-1)
+        )
+
+        normalized = self.reference_norm(reference.to(query.dtype))
+        key, value = self.key(normalized), self.value(normalized)
+        score = torch.einsum("btahwd,bavnd->btahwvn", query, key) * self.scale
+        reference_valid = valid.bool()[:, None, :, None, None, :, None]
+        score = score.masked_fill(~reference_valid, -1e4)
+        attention = score.softmax(dim=-1)
+        projected = torch.einsum(
+            "btahwvn,bavnc->btahwvc", attention, value
+        )
+        projected *= valid.to(projected.dtype)[:, None, :, None, None, :, None]
+
+        # Preserve view identity by concatenating the four independently
+        # queried feature groups. Residents are combined only in target space.
+        projected = projected.flatten(-2)
+        projected *= roi.to(projected.dtype)[..., None]
+        projected = projected.sum(dim=2)
+        return projected.permute(0, 1, 4, 2, 3).contiguous()

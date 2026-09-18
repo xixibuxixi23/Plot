@@ -45,13 +45,17 @@ requires M1 to fill all unknown cells first.
 
 New full retraining should use `--simple-m3`.  This architecture removes the
 legacy deep-condition, warped-appearance, entity-reference, geometry-aware and
-multi-block reference adapters.  It keeps three explicit condition routes:
+multi-block reference adapters.  It keeps one dense spatial input and one
+global modulation route:
 
-1. voxel raster and per-resident state are projected into screen space and
-   fused by one scene encoder;
-2. the target resident's action/state modulates the DiT through AdaLN;
-3. four-view appearance is compressed to a small memory and injected once by
-   ROI-biased reference attention.
+1. player ROIs independently query all four reference views; the four resulting
+   feature groups remain separate in channels and are never blended or warped
+   as RGB;
+2. the noisy video latent, dense voxel raster, projected resident state/action,
+   and ROI-attended appearance features are concatenated and jointly projected
+   by one patch embedder;
+3. the target resident's action/state and diffusion time modulate every DiT
+   block through AdaLN.  The DiT itself uses only spatial/temporal self-attention.
 
 The canonical portable from-scratch recipe is
 `train_scripts/recipes/m3/train_m3_simple.sh`.  Its `4x2` token grid keeps

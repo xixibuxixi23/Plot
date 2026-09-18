@@ -353,7 +353,7 @@ def test_unified_player_reference_is_the_only_appearance_route_and_uses_all_view
     assert grad is not None and grad.abs().sum() > 0
 
 
-def test_simple_m3_has_one_scene_path_and_one_compact_appearance_path():
+def test_simple_m3_jointly_embeds_video_and_raster_with_compact_appearance_path():
     base = tiny_model()
     model = Renderer(replace(
         base.cfg,
@@ -362,8 +362,10 @@ def test_simple_m3_has_one_scene_path_and_one_compact_appearance_path():
         player_reference_grid_size=(4, 2),
     )).train()
 
-    assert model.core.scene_condition_embedder is not None
+    assert model.core.x_embedder.proj.in_channels > model.core.in_channels
     assert model.core.actor_condition_embedder is None
+    assert model.core.unified_reference_adapter is None
+    assert model.roi_appearance_projector is not None
     assert model.core.condition_reinjectors is None
     assert model.core.appearance_reinjectors is None
     assert model.core.entity_reference_adapters is None
@@ -372,7 +374,8 @@ def test_simple_m3_has_one_scene_path_and_one_compact_appearance_path():
     cond = conditions(9)
     encoded = model.encode_conditions(cond)
     assert encoded["actor_spatial_condition"].shape == (1, 9, 4, 4, 4)
-    assert encoded["unified_reference_tokens"].shape == (1, 2, 4, 8, 256)
+    assert encoded["roi_appearance_condition"].shape == (1, 9, 32, 4, 4)
+    assert "unified_reference_tokens" not in encoded
     assert "unified_reference_view_weights" not in encoded
     assert "unified_reference_local_coordinates" not in encoded
 
@@ -385,18 +388,45 @@ def test_simple_m3_has_one_scene_path_and_one_compact_appearance_path():
 
     with torch.no_grad():
         model.core.final_layer.linear.weight.normal_(std=.03)
-        model.core.unified_reference_adapter.to_output.weight.normal_(std=.02)
         for block in model.core.blocks:
             block.s_adaLN_modulation[-1].weight.normal_(std=.03)
             block.t_adaLN_modulation[-1].weight.normal_(std=.03)
     output = model(torch.randn(1, 9, 16, 4, 4), torch.rand(1, 9), cond)
     output.square().mean().backward()
-    assert model.core.scene_condition_embedder.weight.grad.abs().sum() > 0
+    condition_grad = model.core.x_embedder.proj.weight.grad[:, model.core.in_channels:]
+    assert condition_grad.abs().sum() > 0
     assert model.resident_encoder.actor_mlp[0].weight.grad.abs().sum() > 0
     assert model.reference_encoder.encoder[0].weight.grad.abs().sum() > 0
+    assert model.roi_appearance_projector.value.weight.grad.abs().sum() > 0
 
-    with pytest.raises(ValueError, match="one scene input"):
+    with pytest.raises(ValueError, match="one joint spatial input"):
         Renderer(replace(model.cfg, unified_reference_reinject_blocks=(0,)))
+
+
+def test_simple_m3_keeps_four_roi_appearance_views_in_separate_channels():
+    base = tiny_model()
+    model = Renderer(replace(
+        base.cfg,
+        simple_conditioning=True,
+        unified_player_reference=True,
+        player_reference_grid_size=(4, 2),
+    )).eval()
+    cond = conditions(3)
+    with torch.no_grad():
+        baseline = model.encode_conditions(cond)["roi_appearance_condition"]
+        channels_per_view = baseline.shape[2] // 4
+        for view in range(4):
+            changed = {
+                name: value.clone() if torch.is_tensor(value) else value
+                for name, value in cond.items()
+            }
+            changed["player_skin"][:, 1, view] += 2
+            projected = model.encode_conditions(changed)["roi_appearance_condition"]
+            delta = (projected - baseline).abs()
+            start, end = view * channels_per_view, (view + 1) * channels_per_view
+            assert delta[:, :, start:end].sum() > 0
+            assert delta[:, :, :start].sum() == 0
+            assert delta[:, :, end:].sum() == 0
 
 
 def test_geometry_aware_unified_reference_uses_view_and_local_coordinates():

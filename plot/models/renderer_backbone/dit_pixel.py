@@ -824,6 +824,7 @@ class FrameDepthStackPixelDitDenoiserArgs:
     action_cond_dim : int = 23
     extra_condition_dim : int = 0
     actor_condition_dim : int = 0
+    roi_appearance_dim : int = 0
     deep_condition_reinjection : bool = False
     hud_condition_dim : int = 0
     appearance_condition_dim : int = 0
@@ -879,6 +880,7 @@ class FrameDepthStackPixelDiT(nn.Module):
             action_cond_dim=23,
             extra_condition_dim=0,
             actor_condition_dim=0,
+            roi_appearance_dim=0,
             deep_condition_reinjection=False,
             hud_condition_dim=0,
             appearance_condition_dim=0,
@@ -940,6 +942,14 @@ class FrameDepthStackPixelDiT(nn.Module):
         self.qk_rms_norm = qk_rms_norm
         self.gradient_checkpointing = gradient_checkpointing
         self.simple_conditioning = bool(simple_conditioning)
+        self.actor_condition_dim = int(actor_condition_dim)
+        self.roi_appearance_dim = int(roi_appearance_dim)
+        if self.simple_conditioning and (
+            self.actor_condition_dim <= 0 or self.roi_appearance_dim <= 0
+        ):
+            raise ValueError(
+                "M3-Simple requires resident and ROI appearance input channels"
+            )
         self.deep_condition_reinjection = bool(deep_condition_reinjection)
         self.unified_reference_reinject_blocks = tuple(
             int(index) for index in unified_reference_reinject_blocks
@@ -968,10 +978,15 @@ class FrameDepthStackPixelDiT(nn.Module):
         raster_num_layers = self.voxel_dim * 4
         raster_layers_out = (raster_num_layers - depth_patch_size) // depth_stride_size + 1
         raster_channels_total = raster_layers_out * depth_output_dim
-        total_in_channels = (
-            in_channels if self.simple_conditioning
-            else in_channels + raster_channels_total
+        # M3-Simple jointly embeds every target-aligned dense input. Appearance
+        # reaches this point as implicit ROI-attended features, never as a
+        # resized or warped reference image.
+        simple_spatial_channels = (
+            self.actor_condition_dim + self.roi_appearance_dim
+            if self.simple_conditioning
+            else 0
         )
+        total_in_channels = in_channels + raster_channels_total + simple_spatial_channels
         #embedders. Takes depth sorted features + depths as input. Concats depth features and depth positional encodings then convolves with 1d filter.
         self.depth_embedder = DepthPatchEmbedder(
             num_layers=raster_num_layers,
@@ -993,16 +1008,6 @@ class FrameDepthStackPixelDiT(nn.Module):
         self.actor_condition_embedder = (
             nn.Conv2d(actor_condition_dim, hidden_size, kernel_size=patch_size, stride=patch_size)
             if actor_condition_dim > 0 and not self.simple_conditioning
-            else None
-        )
-        self.scene_condition_embedder = (
-            nn.Conv2d(
-                raster_channels_total + actor_condition_dim,
-                hidden_size,
-                kernel_size=patch_size,
-                stride=patch_size,
-            )
-            if self.simple_conditioning
             else None
         )
         self.condition_mask_embedder = nn.Linear(1, hidden_size) if use_condition_mask else None
@@ -1154,10 +1159,6 @@ class FrameDepthStackPixelDiT(nn.Module):
         if self.actor_condition_embedder is not None:
             nn.init.constant_(self.actor_condition_embedder.weight, 0)
             nn.init.constant_(self.actor_condition_embedder.bias, 0)
-        if self.scene_condition_embedder is not None:
-            weight = self.scene_condition_embedder.weight.data
-            nn.init.xavier_uniform_(weight.view(weight.shape[0], -1))
-            nn.init.constant_(self.scene_condition_embedder.bias, 0)
         if self.condition_reinjectors is not None:
             # This makes an old checkpoint an exact functional warm start.
             for adapter in self.condition_reinjectors:
@@ -1341,28 +1342,39 @@ class FrameDepthStackPixelDiT(nn.Module):
                 raster_tokens, "(b t) d h w -> b t h w d", b=B, t=T
             )
 
-        # M3-Simple has one explicit spatial condition route: voxel raster and
-        # per-resident state maps are jointly encoded and added to video tokens.
+        # Dense scene evidence and ROI-attended resident maps enter one joint
+        # local projection before any DiT block.
         x = rearrange(x, "b t c h w -> (b t) c h w")
+        joint_inputs = [x, raster_cond]
         if self.simple_conditioning:
             actor_condition = external_cond.get("actor_spatial_condition")
-            if actor_condition is None:
-                raise ValueError("M3-Simple requires actor_spatial_condition")
-            if actor_condition.shape[:2] != (B, T) or actor_condition.shape[-2:] != (H, W):
+            expected_actor = (B, T, self.actor_condition_dim, H, W)
+            if actor_condition is None or tuple(actor_condition.shape) != expected_actor:
                 raise ValueError(
-                    "actor_spatial_condition must be [B,T,C,H,W] with "
-                    f"B,T,H,W={(B, T, H, W)}, got {tuple(actor_condition.shape)}"
+                    f"actor_spatial_condition must have shape {expected_actor}"
                 )
-            actor_flat = rearrange(
-                actor_condition, "b t c h w -> (b t) c h w"
-            ).to(x.dtype)
-            scene = torch.cat((raster_cond, actor_flat), dim=1)
-            x = self.x_embedder(x) + rearrange(
-                self.scene_condition_embedder(scene), "bt d h w -> bt h w d"
+            appearance_condition = external_cond.get("roi_appearance_condition")
+            expected_appearance = (B, T, self.roi_appearance_dim, H, W)
+            if (
+                appearance_condition is None
+                or tuple(appearance_condition.shape) != expected_appearance
+            ):
+                raise ValueError(
+                    "roi_appearance_condition must have shape "
+                    f"{expected_appearance}"
+                )
+            joint_inputs.extend(
+                (
+                    rearrange(
+                        actor_condition, "b t c h w -> (b t) c h w"
+                    ).to(x.dtype),
+                    rearrange(
+                        appearance_condition, "b t c h w -> (b t) c h w"
+                    ).to(x.dtype),
+                )
             )
-        else:
-            x = torch.cat([x, raster_cond], dim=1)
-            x = self.x_embedder(x)
+        x = torch.cat(joint_inputs, dim=1)
+        x = self.x_embedder(x)
 
         actor_tokens = None
         if self.actor_condition_embedder is not None:
