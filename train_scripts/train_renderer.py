@@ -24,6 +24,7 @@ from plot.data.renderer_dataset import TextAgentRendererDataset, collate_rendere
 from plot.data.appearance_counterfactual_dataset import AppearanceCounterfactualRendererDataset
 from plot.models.renderer import Renderer, RendererArgs
 from plot.models.renderer_codec import RendererCodec
+from plot.models.latent_normalization import resolve_training_normalization
 from plot.models.player_identity import PlayerIdentityEncoder
 from plot.checkpoint_io import record_checkpoint_failure, staged_torch_save
 from plot.training.renderer_monitoring import render_probe, save_probe_manifest, select_renderer_probes
@@ -223,6 +224,10 @@ def main():
     )
     parser.add_argument("--vocabulary", required=True)
     parser.add_argument("--pixel-vae", required=True)
+    parser.add_argument(
+        "--latent-normalization", choices=("none", "pixel-vae"),
+        help="Fresh M3-Simple defaults to fixed Pixel VAE mean/std; resume/warm-start inherits checkpoint scale",
+    )
     parser.add_argument("--backbone-checkpoint")
     parser.add_argument(
         "--warm-start",
@@ -785,7 +790,20 @@ def main():
         report = raw_model.load_2daction_backbone(load_weights(args.backbone_checkpoint))
         if rank == 0:
             print(json.dumps(report))
-    codec = RendererCodec(load_weights(args.pixel_vae)).to(device).eval()
+    checkpoint_path = args.resume or args.warm_start
+    checkpoint = (
+        torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        if checkpoint_path else None
+    )
+    latent_normalization = resolve_training_normalization(
+        args.latent_normalization, simple_m3=args.simple_m3,
+        checkpoint_config=checkpoint.get("config", {}) if checkpoint is not None else None,
+    )
+    codec = RendererCodec(
+        load_weights(args.pixel_vae), latent_normalization=latent_normalization
+    ).to(device).eval()
+    if rank == 0:
+        print(json.dumps({"codec": codec.get_config()}))
     identity_encoder = None
     if args.loss_mode == "combined" and args.player_identity_checkpoint:
         identity_checkpoint = torch.load(
@@ -873,7 +891,6 @@ def main():
         }))
     start_step = 0
     if args.resume:
-        checkpoint = torch.load(args.resume, map_location="cpu", weights_only=False)
         resume_report = load_renderer_resume(
             raw_model,
             optimizer,
@@ -885,7 +902,6 @@ def main():
         if rank == 0:
             print(json.dumps({"resume": str(args.resume), **resume_report}))
     elif args.warm_start:
-        checkpoint = torch.load(args.warm_start, map_location="cpu", weights_only=False)
         warm_state = dict(checkpoint["model"])
         migrated_parameters = []
         if args.unified_player_reference:
@@ -955,6 +971,7 @@ def main():
         dist.barrier()
     run_config = {
         "renderer": asdict(cfg),
+        "codec": codec.get_config(),
         "training": vars(args),
         "item_vocabulary": dataset.item_vocabulary,
         "class_to_raw": dataset.vocabulary.class_to_raw,

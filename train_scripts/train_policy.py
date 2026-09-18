@@ -50,12 +50,12 @@ def lookup_text(cache, ids, device, dtype):
             cache["attention_mask"][ids].to(device=device, dtype=torch.bool, non_blocking=True))
 
 
-def load_renderer(path):
+def load_renderer(path, *, return_config=False):
     checkpoint = torch.load(path, map_location="cpu", weights_only=False)
     config = checkpoint["config"].get("renderer", checkpoint["config"])
     renderer = Renderer(RendererArgs(**config))
     renderer.load_state_dict(checkpoint["model"], strict=True)
-    return renderer
+    return (renderer, checkpoint["config"]) if return_config else renderer
 
 
 @torch.no_grad()
@@ -128,12 +128,14 @@ def main():
                             shuffle=False, num_workers=a.workers, pin_memory=True,
                             collate_fn=collate_inserted_policy)
 
-    renderer = load_renderer(a.m3_checkpoint)
+    renderer, renderer_config = load_renderer(a.m3_checkpoint, return_config=True)
     text_cache = load_file(str(a.text_cache), device="cpu")
     text_hidden = int(text_cache["encoder_hidden"].shape[-1])
     cfg = InsertedPolicyArgs(num_policy_blocks=a.policy_blocks, text_hidden_size=text_hidden)
     raw = InsertedInhabitantPolicy(renderer, cfg).to(device)
-    codec = RendererCodec(load_file(str(a.pixel_vae))).to(device).eval()
+    codec = RendererCodec.from_run_config(
+        load_file(str(a.pixel_vae)), renderer_config
+    ).to(device).eval()
     optimizer = torch.optim.AdamW(raw.families.parameters(), lr=a.lr)
     start = 0
     if a.resume:
@@ -146,7 +148,7 @@ def main():
     if rank == 0:
         output.mkdir(parents=True, exist_ok=True)
         (output / "config.json").write_text(json.dumps(
-            {"policy": asdict(cfg), "training": vars(a),
+            {"policy": asdict(cfg), "training": vars(a), "codec": codec.get_config(),
              "contract": "8 completed frames -> 8-action chunk"}, indent=2))
     if world > 1: dist.barrier()
 

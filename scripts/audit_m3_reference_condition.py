@@ -172,7 +172,9 @@ def main():
     device = torch.device(args.device)
     model = Renderer(RendererArgs(**renderer_config)).to(device).eval()
     model.load_state_dict(_weights(checkpoint_path), strict=True)
-    codec = RendererCodec(_weights(config["training"]["pixel_vae"])).to(device).eval()
+    codec = RendererCodec.from_run_config(
+        _weights(config["training"]["pixel_vae"]), config
+    ).to(device).eval()
     identity_path = args.identity_checkpoint or config["training"].get(
         "player_identity_checkpoint"
     )

@@ -32,12 +32,16 @@ from train_scripts.train_renderer import (
 torch.set_num_threads(2)
 
 
-def tiny_model():
+def tiny_model(*, simple_conditioning=False):
     torch.manual_seed(42)
     model = Renderer(RendererArgs(3, 8, input_h=4, input_w=4, hidden_size=32, depth=2,
                                  num_heads=4, voxel_channels=4, condition_dim=16, actor_channels=4,
                                  context_frames=65, cache_frames=16,
-                                 gradient_checkpointing=False, gpu_rasterizer=False))
+                                 gradient_checkpointing=False, gpu_rasterizer=False,
+                                 simple_conditioning=simple_conditioning,
+                                 unified_player_reference=simple_conditioning,
+                                 player_reference_grid_size=(4, 2) if simple_conditioning else (8, 4),
+                                 player_reference_position_encoding=simple_conditioning))
     # Zero initialization would make future-invariance tests vacuous.
     with torch.no_grad():
         model.core.final_layer.linear.weight.normal_(std=.03)
@@ -45,7 +49,8 @@ def tiny_model():
             block.s_adaLN_modulation[-1].weight.normal_(std=.03)
             block.t_adaLN_modulation[-1].weight.normal_(std=.03)
         model.core.extra_condition_embedder.weight.normal_(std=.03)
-        model.core.actor_condition_embedder.weight.normal_(std=.03)
+        if model.core.actor_condition_embedder is not None:
+            model.core.actor_condition_embedder.weight.normal_(std=.03)
     return model
 
 
@@ -70,8 +75,9 @@ def conditions(t=17):
     }
 
 
-def test_attention_is_bidirectional_within_blocks_and_causal_between_blocks():
-    model = tiny_model().eval()
+@pytest.mark.parametrize("simple_conditioning", [False, True])
+def test_attention_is_bidirectional_within_blocks_and_causal_between_blocks(simple_conditioning):
+    model = tiny_model(simple_conditioning=simple_conditioning).eval()
     cond = conditions(17)
     x, time = torch.randn(1,17,16,4,4), torch.rand(1,17)
     with torch.no_grad():
@@ -111,8 +117,9 @@ def test_counterfactual_groups_can_share_random_training_times():
     assert bool(((time[:, 1:] > 0) & (time[:, 1:] < 1)).all())
 
 
-def test_training_backward_and_supervision_only_masks():
-    model = tiny_model().train()
+@pytest.mark.parametrize("simple_conditioning", [False, True])
+def test_training_backward_and_supervision_only_masks(simple_conditioning):
+    model = tiny_model(simple_conditioning=simple_conditioning).train()
     cond = conditions(65)
     clean = torch.randn(1,65,16,4,4)
     loss = renderer_flow_loss(model, clean, cond, region_weight=torch.ones(1,65,1,4,4))
@@ -370,6 +377,8 @@ def test_simple_m3_jointly_embeds_video_and_raster_with_compact_appearance_path(
     assert model.core.appearance_reinjectors is None
     assert model.core.entity_reference_adapters is None
     assert model.core.unified_reference_reinject_blocks == ()
+    assert model.core.condition_mask_embedder is None
+    assert not any("condition_mask_embedder" in name for name in model.state_dict())
 
     cond = conditions(9)
     encoded = model.encode_conditions(cond)
@@ -378,6 +387,7 @@ def test_simple_m3_jointly_embeds_video_and_raster_with_compact_appearance_path(
     assert "unified_reference_tokens" not in encoded
     assert "unified_reference_view_weights" not in encoded
     assert "unified_reference_local_coordinates" not in encoded
+    assert "condition_mask" not in encoded
 
     # The second resident's action remains attached to its projected region.
     changed = {name: value.clone() if torch.is_tensor(value) else value
@@ -611,8 +621,9 @@ def test_rollout_can_start_at_absolute_episode_frame():
     assert {int(c["global_end_index"]) for c in model.core.kv_caches} == {20}
 
 
-def test_rollout_generates_64_frames_as_eight_cached_chunks():
-    model = tiny_model().eval()
+@pytest.mark.parametrize("simple_conditioning", [False, True])
+def test_rollout_generates_64_frames_as_eight_cached_chunks(simple_conditioning):
+    model = tiny_model(simple_conditioning=simple_conditioning).eval()
     cond = conditions(65)
     runner = RendererRollout(model, denoising_steps=1)
     runner.start(torch.randn(1, 1, 16, 4, 4), slice_conditions(cond, 0, 1))
@@ -622,6 +633,76 @@ def test_rollout_generates_64_frames_as_eight_cached_chunks():
     assert result.shape == (1, 64, 16, 4, 4)
     assert runner.next_frame == 65
     assert {int(c["global_end_index"]) for c in model.core.kv_caches} == {65}
+
+
+def test_simple_m3_needs_no_condition_mask_in_training_or_rollout():
+    model = tiny_model(simple_conditioning=True)
+    cond = conditions(65)
+    cond.pop("condition_mask")
+    clean = torch.randn(1, 65, 16, 4, 4)
+    seen = []
+
+    def check_core_input(_module, args):
+        _, time, encoded = args
+        assert "condition_mask" not in encoded
+        seen.append((time.detach().clone(), encoded["action_prefix_mask"].clone()))
+
+    hook = model.core.register_forward_pre_hook(check_core_input)
+    try:
+        model.train()
+        model.core.gradient_checkpointing = True
+        loss = renderer_flow_loss(model, clean, cond)
+        loss.backward()
+        assert torch.isfinite(loss)
+        assert model.reference_encoder.encoder[0].weight.grad.abs().sum() > 0
+        train_time, prefix = seen.pop()
+        assert train_time[0, 0] == 0 and prefix.sum() == 1 and prefix[0, 0]
+
+        model.eval()
+        with torch.no_grad():
+            expected = model(clean[:, :9], train_time[:, :9], slice_conditions(cond, 0, 9))
+            # Shared/legacy callers may still supply this metadata; it has no
+            # influence on M3-Simple's neural input.
+            tagged = dict(slice_conditions(cond, 0, 9),
+                          condition_mask=torch.ones(1, 9, dtype=torch.bool))
+            actual = model(clean[:, :9], train_time[:, :9], tagged)
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+        seen.clear()
+
+        runner = RendererRollout(model, denoising_steps=2)
+        runner.start(clean[:, :1], slice_conditions(cond, 0, 1))
+        output = runner.generate_64(torch.randn_like(clean[:, 1:]), slice_conditions(cond, 1, 65))
+        assert output.shape == clean[:, 1:].shape and torch.isfinite(output).all()
+        assert seen[0][0].eq(0).all() and seen[0][1].all()
+        for block in range(8):
+            denoise0, denoise1, commit = seen[1 + block * 3:1 + (block + 1) * 3]
+            assert denoise0[0].eq(1).all()
+            assert denoise1[0].eq(.5).all()
+            assert commit[0].eq(0).all()
+            assert not any(prefix.any() for _, prefix in (denoise0, denoise1, commit))
+    finally:
+        hook.remove()
+        model.clear_cache()
+
+
+def test_simple_m3_clean_history_cache_matches_full_forward():
+    model = tiny_model(simple_conditioning=True).eval()
+    cond = conditions(17)
+    cond.pop("condition_mask")
+    x = torch.randn(1, 17, 16, 4, 4)
+    time = torch.zeros(1, 17)
+    time[:, 9:] = .6
+    with torch.no_grad():
+        expected = model(x, time, cond)[:, 9:]
+        runner = RendererRollout(model)
+        try:
+            runner.start(x[:, :1], slice_conditions(cond, 0, 1))
+            runner._commit(x[:, 1:9], slice_conditions(cond, 1, 9), 1)
+            actual = model(x[:, 9:], time[:, 9:], slice_conditions(cond, 9, 17),
+                           global_start_idx=9, cache_write=False)
+            torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-6)
+        finally:
+            model.clear_cache()
 
 
 def test_crops_keep_unknown_distinct_and_actions_are_incoming():
@@ -983,6 +1064,39 @@ def test_frozen_codec_rgb_latent_layout():
     codec.decode_for_loss(predicted).mean().backward()
     assert predicted.grad.abs().sum() > 0
     assert all(parameter.grad is None for parameter in codec.parameters())
+
+
+def test_normalized_codec_simple_flow_backward_and_rollout():
+    from dataclasses import asdict
+    from plot.models.renderer_codec import RendererCodec
+    from plot.models.latent_normalization import pixel_vae_latent_stats
+    from plot.models.renderer_backbone.vae_pixel import ViTVae, ViTVaeArgs
+
+    cfg = ViTVaeArgs(input_height=40, input_width=40, enc_dim=32, enc_depth=1,
+                     enc_heads=4, dec_dim=32, dec_depth=1, dec_heads=4)
+    codec = RendererCodec(
+        ViTVae(**asdict(cfg)).state_dict(), cfg,
+        latent_normalization=pixel_vae_latent_stats(),
+    )
+    model = tiny_model(simple_conditioning=True).train()
+    cond = conditions(65)
+    cond.pop("condition_mask")
+    clean = codec.encode(torch.rand(1, 65, 3, 40, 40))
+    loss = renderer_flow_loss(model, clean, cond)
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert model.core.final_layer.linear.weight.grad.abs().sum() > 0
+    assert all(p.grad is None for p in codec.parameters())
+    model.eval()
+    with torch.no_grad():
+        rollout = RendererRollout(model, denoising_steps=2)
+        rollout.start(clean[:, :1], slice_conditions(cond, 0, 1))
+        prediction = rollout.generate_64(
+            torch.randn_like(clean[:, 1:]), slice_conditions(cond, 1, 65)
+        )
+        rgb = codec.decode(prediction)
+    assert rgb.shape == (1, 64, 3, 40, 40)
+    assert torch.isfinite(rgb).all()
 
 
 def test_full_resolution_entity_and_health_losses_are_differentiable():

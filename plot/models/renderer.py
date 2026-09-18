@@ -253,7 +253,9 @@ class Renderer(nn.Module):
             ),
             context_window_size=cfg.context_frames, cache_window_size=cfg.cache_frames,
             voxel_dim=48, is_causal=True, causal_block_size=cfg.block_frames,
-            use_condition_mask=True,
+            # M3-Simple uses diffusion time alone for clean/noisy status.
+            # Keep the old embedding only for legacy renderer checkpoints.
+            use_condition_mask=not cfg.simple_conditioning,
             deep_condition_reinjection=cfg.deep_condition_reinjection,
             hud_condition_dim=3 if cfg.deep_condition_reinjection else 0,
             appearance_condition_dim=(
@@ -289,9 +291,10 @@ class Renderer(nn.Module):
             "action": self.select(cond["action"], target),
             "extra_condition": self.select(extra, target),
             "actor_spatial_condition": self.select(spatial, target),
-            "condition_mask": cond["condition_mask"],
             "action_prefix_mask": cond["action_prefix_mask"],
         }
+        if self.core.use_condition_mask:
+            result["condition_mask"] = cond["condition_mask"]
         if self.appearance_spatial_encoder is not None:
             result["appearance_spatial_condition"] = self.appearance_spatial_encoder(
                 spatial_cond, target
@@ -373,7 +376,10 @@ class Renderer(nn.Module):
         if completed_latents.ndim != 5:
             raise ValueError("completed_latents must be [B,T,C,H,W]")
         time = torch.zeros(completed_latents.shape[:2], device=completed_latents.device)
-        condition = dict(cond, condition_mask=torch.ones_like(time, dtype=torch.bool))
+        condition = dict(cond)
+        condition.pop("condition_mask", None)
+        if self.core.use_condition_mask:
+            condition["condition_mask"] = torch.ones_like(time, dtype=torch.bool)
         _, features = self(completed_latents, time, condition, return_features=True,
                            cache_write=False)
         return self.compress_policy_features(features)

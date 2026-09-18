@@ -57,6 +57,34 @@ global modulation route:
 3. the target resident's action/state and diffusion time modulate every DiT
    block through AdaLN.  The DiT itself uses only spatial/temporal self-attention.
 
+M3-Simple has no `condition_mask` embedding. Diffusion time alone indicates
+noise level: the external first frame and completed cached history use `t=0`,
+and each future eight-frame training block samples its own time. Committing a
+generated block does not add another clean-frame tag or re-noise its latents.
+The block-causal attention mask and the separate action-window-prefix indicator
+remain in place. Shared dataset metadata may still contain `condition_mask`
+for legacy models; M3-Simple ignores it. Legacy renderer modes retain the
+embedding for their existing checkpoints. Earlier M3-Simple checkpoints with
+that embedding are not strict-resume compatible with this architecture; use
+the from-scratch recipe for this experiment.
+
+Fresh M3-Simple training defaults to `--latent-normalization pixel-vae`:
+the frozen VAE posterior mean is converted to `(z - mean) / std` before
+noise interpolation, flow supervision and clean-history caching. Both ordinary
+decoding and differentiable pixel-loss decoding apply the inverse transform
+`z * std + mean` before the VAE. Gaussian noise and the flow formula are unchanged.
+The fixed 16-channel statistics live in `plot/models/latent_normalization.py`;
+they come from the old `2daction/stage2_remote_full_47676` training data using
+the same frozen VAE, not from a new estimate on the fixed-skins release.
+These are dataset-level constants, never per-frame or per-batch statistics.
+The complete numbers and provenance are saved under
+`codec.latent_normalization` in `config.json`, W&B config and checkpoints.
+Inference and M4 must use `RendererCodec.from_run_config(...)` with the matching
+M3 run config. Configs without this field retain the historical raw scale.
+Resume/warm-start inherits the saved transform and rejects an explicit conflicting
+`--latent-normalization`; changing scale requires a fresh run. Old raw-scale loss
+values are not directly comparable to normalized-space loss values.
+
 The canonical portable from-scratch recipe is
 `train_scripts/recipes/m3/train_m3_simple.sh`.  Its `4x2` token grid keeps
 eight tokens per view, or 32 tokens per resident.  It does not load or overwrite

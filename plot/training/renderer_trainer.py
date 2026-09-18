@@ -79,9 +79,13 @@ def renderer_flow_loss(
     if base.core.kv_caches is not None:
         raise RuntimeError("clear rollout caches before training")
     c = dict(conditions)
-    c["condition_mask"] = (torch.arange(clean.shape[1], device=clean.device)[None] == 0)
-    c["condition_mask"] = c["condition_mask"].expand(len(clean), -1)
-    c["action_prefix_mask"] = c["condition_mask"]
+    c.pop("condition_mask", None)
+    # The window boundary has no incoming action. This action-specific flag is
+    # independent of clean/noisy status, which M3-Simple gets from time alone.
+    prefix = (torch.arange(clean.shape[1], device=clean.device)[None] == 0)
+    c["action_prefix_mask"] = prefix.expand(len(clean), -1)
+    if getattr(base.core, "use_condition_mask", False):
+        c["condition_mask"] = c["action_prefix_mask"]
     block_frames = base.cfg.block_frames
     time = _sample_blockwise_train_time(
         len(clean), clean.shape[1], block_frames, clean.device, generator,
@@ -590,8 +594,12 @@ class RendererRollout:
         self.next_frame = global_start_idx + 1
 
     def _commit(self, frames, conditions, index):
-        cond = dict(conditions, condition_mask=torch.ones(frames.shape[:2],
-                                                         device=frames.device, dtype=torch.bool))
+        cond = dict(conditions)
+        cond.pop("condition_mask", None)
+        if self.model.core.use_condition_mask:
+            cond["condition_mask"] = torch.ones(
+                frames.shape[:2], device=frames.device, dtype=torch.bool
+            )
         layers = []
         first = max(0, self.model.core.depth - 4)
         def capture(block_index, hidden):
@@ -613,8 +621,12 @@ class RendererRollout:
         if noise.shape[1] != self.block_frames:
             raise ValueError(f"M3 rollout must generate exactly {self.block_frames} new frames")
         x = noise.clone()
-        cond = dict(conditions, condition_mask=torch.zeros(x.shape[:2],
-                                                         device=x.device, dtype=torch.bool))
+        cond = dict(conditions)
+        cond.pop("condition_mask", None)
+        if self.model.core.use_condition_mask:
+            cond["condition_mask"] = torch.zeros(
+                x.shape[:2], device=x.device, dtype=torch.bool
+            )
         # Geometry/appearance is invariant across the denoising iterations.
         encoded = self.model.encode_conditions(cond)
         for step in range(self.denoising_steps):

@@ -9,7 +9,11 @@
 - 使用目标机器上确认空闲的 GPU；每卡 batch 4，effective batch 为 `4 × GPU 数`；
 - 不使用梯度积累；
 - 只使用均匀的 latent flow loss，不使用区域加权或 decoded-pixel 辅助损失；
+- VAE latent 使用固定逐通道标准化 `(z - mean) / std`，解码前还原；统计随代码
+  提供，沿用同一 Pixel VAE 的旧 2daction 统计，不需额外下载。新实验从头训练；
 - BF16、65 帧上下文、32 帧 KV cache、8 帧 causal block；
+- M3-Simple 不使用额外的 `condition_mask` embedding；首帧和已完成历史以 `τ=0`
+  表示，保留 block-causal attention mask 和动作窗口起点标记；
 - 每窗口一个目标视角；
 - W&B online，entity 为 `ckx23-tsinghua-university`，project 为 `plot-m3`；
 - 先运行 3-step smoke，再启动 40,000-step 正式训练。

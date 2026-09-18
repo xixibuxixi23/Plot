@@ -48,6 +48,7 @@ CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES" \
   "${chunk_cache_args[@]}" \
   --vocabulary derived/common/block_vocabulary.json \
   --pixel-vae checkpoints/pixel_vae/model.safetensors \
+  --latent-normalization pixel-vae \
   --output-dir "$output_dir" \
   --checkpoint-staging-dir "$staging_dir" \
   --checkpoint-errors raise \

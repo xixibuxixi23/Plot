@@ -81,7 +81,9 @@ def main() -> None:
     device = torch.device(args.device)
     model = Renderer(RendererArgs(**renderer_config)).to(device).eval()
     model.load_state_dict(_weights(checkpoint_path), strict=True)
-    codec = RendererCodec(_weights(config["training"]["pixel_vae"])).to(device).eval()
+    codec = RendererCodec.from_run_config(
+        _weights(config["training"]["pixel_vae"]), config
+    ).to(device).eval()
     episodes = _episodes(Path(args.dataset_root), args.group_id)
     if len(episodes) < 2:
         raise ValueError("S11 causal audit needs at least two appearance variants")
