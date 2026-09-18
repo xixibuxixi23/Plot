@@ -467,6 +467,7 @@ def renderer_training_losses(
     counterfactual_group_size=1,
     counterfactual_player_difference_weight=0.0,
     counterfactual_pure_noise=True,
+    flow_loss_weight=1.0,
     generator=None,
     profile_timings=None,
 ):
@@ -478,9 +479,9 @@ def renderer_training_losses(
         "player_pixel_edge": float(player_pixel_edge_weight),
         "health_pixel_l1": float(health_pixel_l1_weight),
     }
-    if min(*weights.values(), player_identity_loss_weight,
+    if min(flow_loss_weight, *weights.values(), player_identity_loss_weight,
            counterfactual_player_difference_weight) < 0:
-        raise ValueError("pixel loss weights must be nonnegative")
+        raise ValueError("flow and pixel loss weights must be nonnegative")
     use_pixels = any(weight > 0 for weight in weights.values())
     use_identity = player_identity_loss_weight > 0
     use_counterfactual = counterfactual_player_difference_weight > 0
@@ -561,7 +562,7 @@ def renderer_training_losses(
     auxiliary = auxiliary + player_identity_loss_weight * identity["player_identity_loss"]
     auxiliary = auxiliary + counterfactual_player_difference_weight * counterfactual
     return {
-        "total_loss": flow_loss + auxiliary,
+        "total_loss": float(flow_loss_weight) * flow_loss + auxiliary,
         "flow_loss": flow_loss,
         "auxiliary_loss": auxiliary,
         **pixels,

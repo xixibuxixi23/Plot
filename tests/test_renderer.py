@@ -1186,6 +1186,32 @@ def test_combined_renderer_loss_can_disable_pixel_decoder():
     assert terms['auxiliary_loss'] == 0
 
 
+def test_renderer_loss_can_disable_flow_for_pixel_only_adaptation():
+    class Codec:
+        def decode_for_loss(self, latent, chunk_size=1):
+            return latent[:, :, :3]
+
+    model = tiny_model().train()
+    clean = torch.randn(1, 65, 16, 4, 4)
+    rgb = torch.rand(1, 65, 3, 4, 4)
+    mask = torch.ones(1, 65, 1, 4, 4, dtype=torch.bool)
+    terms = renderer_training_losses(
+        model, Codec(), clean, conditions(65), rgb, mask,
+        player_region_mask=mask,
+        frames_per_sample=3,
+        flow_loss_weight=0,
+        entity_pixel_l1_weight=0,
+        entity_pixel_edge_weight=0,
+        player_pixel_l1_weight=2,
+        player_pixel_edge_weight=0,
+        health_pixel_l1_weight=0,
+    )
+    torch.testing.assert_close(
+        terms['total_loss'], 2 * terms['player_pixel_l1']
+    )
+    assert terms['flow_loss'] > 0
+
+
 def test_flow_loss_mode_disables_every_auxiliary_weight():
     configured = {
         "entity_pixel_l1_weight": 0.5,

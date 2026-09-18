@@ -374,6 +374,14 @@ def main():
         help="Stage-one training: update only native-resolution reference encoder and adapters",
     )
     parser.add_argument(
+        "--freeze-base-for-player-appearance",
+        action="store_true",
+        help=(
+            "M3-Simple appearance stage: freeze the DiT and all scene/state modules; "
+            "update only the player reference encoder and ROI appearance projector"
+        ),
+    )
+    parser.add_argument(
         "--appearance-unfreeze-last-spatial-blocks",
         type=int,
         default=0,
@@ -431,6 +439,12 @@ def main():
             "combined uses the configured auxiliary losses; flow forces all "
             "decoded-pixel, identity, and counterfactual auxiliary weights to zero"
         ),
+    )
+    parser.add_argument(
+        "--flow-loss-weight",
+        type=float,
+        default=1.0,
+        help="Multiplier on latent flow loss; use 0 for decoded-pixel-only adaptation",
     )
     parser.add_argument(
         "--profile-local-step",
@@ -535,8 +549,14 @@ def main():
         and not args.unified_player_reference
     ):
         parser.error("use --warm-start for staged legacy reference training")
-    if args.freeze_base_for_reference and args.freeze_base_for_appearance:
+    if sum((
+        args.freeze_base_for_reference,
+        args.freeze_base_for_appearance,
+        args.freeze_base_for_player_appearance,
+    )) > 1:
         parser.error("choose only one staged-freezing mode")
+    if args.freeze_base_for_player_appearance and not args.simple_m3:
+        parser.error("--freeze-base-for-player-appearance requires --simple-m3")
     if args.unified_player_reference and (
         args.entity_reference_attention
         or args.view_aware_appearance
@@ -663,6 +683,7 @@ def main():
         args.player_identity_margin,
         args.player_identity_negative_weight,
         args.counterfactual_player_difference_weight,
+        args.flow_loss_weight,
     ) < 0:
         parser.error("region and pixel loss weights must be nonnegative")
     world = int(os.environ.get("WORLD_SIZE", "1"))
@@ -820,7 +841,13 @@ def main():
         identity_encoder.crop_size = tuple(identity_checkpoint.get("crop_size", (128, 64)))
         identity_encoder.load_state_dict(identity_checkpoint["model"], strict=True)
         identity_encoder.requires_grad_(False)
-    if args.freeze_base_for_reference:
+    if args.freeze_base_for_player_appearance:
+        for name, parameter in raw_model.named_parameters():
+            parameter.requires_grad_(name.startswith((
+                "reference_encoder.",
+                "roi_appearance_projector.",
+            )))
+    elif args.freeze_base_for_reference:
         first_unfrozen_spatial_block = (
             args.depth - args.reference_unfreeze_last_spatial_blocks
         )
@@ -1060,6 +1087,7 @@ def main():
     counterfactual_epoch = 0
     auxiliary_weights = effective_auxiliary_loss_weights(args)
     loss_kwargs = {
+        "flow_loss_weight": args.flow_loss_weight,
         "frames_per_sample": args.pixel_loss_frames,
         "entity_pixel_l1_weight": auxiliary_weights["entity_pixel_l1_weight"],
         "entity_pixel_edge_weight": auxiliary_weights["entity_pixel_edge_weight"],
