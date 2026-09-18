@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # Player-only adaptation for M3-Simple. The full checkpoint supplies the
-# established scene denoiser; only the reference encoder and ROI projector move.
+# established scene denoiser. The reference encoder, ROI projector, and only
+# the appearance columns of the joint patch embedder are updated.
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 cd "$repo_root"

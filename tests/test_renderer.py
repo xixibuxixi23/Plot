@@ -25,11 +25,20 @@ from plot.training.renderer_trainer import (
 from train_scripts.train_renderer import (
     effective_auxiliary_loss_weights,
     load_renderer_resume,
+    restrict_gradient_to_last_input_channels,
     use_counterfactual_step,
 )
 
 
 torch.set_num_threads(2)
+
+
+def test_restrict_gradient_to_last_input_channels():
+    weight = torch.nn.Parameter(torch.randn(3, 7, 2, 2))
+    restrict_gradient_to_last_input_channels(weight, 2)
+    weight.sum().backward()
+    assert torch.count_nonzero(weight.grad[:, :-2]) == 0
+    torch.testing.assert_close(weight.grad[:, -2:], torch.ones_like(weight.grad[:, -2:]))
 
 
 def tiny_model(*, simple_conditioning=False, qk_rms_norm=False):

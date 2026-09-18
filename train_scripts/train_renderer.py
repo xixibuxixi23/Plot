@@ -112,6 +112,19 @@ def effective_auxiliary_loss_weights(args):
     return {name: float(getattr(args, name)) for name in AUXILIARY_LOSS_WEIGHT_NAMES}
 
 
+def restrict_gradient_to_last_input_channels(parameter, channel_count):
+    """Train only the final input-channel slice of a convolution weight.
+
+    M3-Simple appends ROI appearance after every established joint-patch input,
+    so this preserves latent, voxel, and coarse-player columns exactly.
+    """
+    if parameter.ndim < 2 or not 1 <= channel_count <= parameter.shape[1]:
+        raise ValueError("invalid trainable input-channel count")
+    mask = torch.zeros_like(parameter)
+    mask[:, -channel_count:] = 1
+    return parameter.register_hook(lambda gradient: gradient * mask)
+
+
 def load_renderer_resume(
     model,
     optimizer,
@@ -848,11 +861,19 @@ def main():
         identity_encoder.load_state_dict(identity_checkpoint["model"], strict=True)
         identity_encoder.requires_grad_(False)
     if args.freeze_base_for_player_appearance:
+        joint_patch_weight_name = "core.x_embedder.proj.weight"
         for name, parameter in raw_model.named_parameters():
-            parameter.requires_grad_(name.startswith((
-                "reference_encoder.",
-                "roi_appearance_projector.",
-            )))
+            parameter.requires_grad_(
+                name.startswith((
+                    "reference_encoder.",
+                    "roi_appearance_projector.",
+                ))
+                or name == joint_patch_weight_name
+            )
+        joint_patch_weight = dict(raw_model.named_parameters())[joint_patch_weight_name]
+        restrict_gradient_to_last_input_channels(
+            joint_patch_weight, raw_model.core.roi_appearance_dim
+        )
     elif args.freeze_base_for_reference:
         first_unfrozen_spatial_block = (
             args.depth - args.reference_unfreeze_last_spatial_blocks
@@ -920,11 +941,31 @@ def main():
             {"params": reference_parameters, "lr": args.lr},
             {"params": base_parameters, "lr": args.lr * args.unfrozen_base_lr_scale},
         ])
+    elif args.freeze_base_for_player_appearance:
+        joint_patch_weight = raw_model.core.x_embedder.proj.weight
+        appearance_parameters = [
+            parameter for parameter in trainable_parameters
+            if parameter is not joint_patch_weight
+        ]
+        # The hook freezes the established input columns. Disable decoupled
+        # weight decay for this tensor so AdamW cannot move those frozen values.
+        optimizer = torch.optim.AdamW([
+            {"params": appearance_parameters},
+            {"params": [joint_patch_weight], "weight_decay": 0.0},
+        ], lr=args.lr)
     else:
         optimizer = torch.optim.AdamW(trainable_parameters, lr=args.lr)
     if rank == 0:
+        effective_trainable_parameters = sum(p.numel() for p in trainable_parameters)
+        if args.freeze_base_for_player_appearance:
+            joint_patch_weight = raw_model.core.x_embedder.proj.weight
+            effective_trainable_parameters -= joint_patch_weight.numel()
+            effective_trainable_parameters += (
+                joint_patch_weight[:, -raw_model.core.roi_appearance_dim:].numel()
+            )
         print(json.dumps({
             "trainable_parameters": sum(p.numel() for p in trainable_parameters),
+            "effective_trainable_parameters": effective_trainable_parameters,
             "total_parameters": sum(p.numel() for p in raw_model.parameters()),
         }))
     start_step = 0
