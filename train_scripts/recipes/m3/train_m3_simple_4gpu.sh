@@ -8,8 +8,9 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 cd "$repo_root"
 
 dataset_root=${PLOT_DATASET_ROOT:?Set PLOT_DATASET_ROOT to the downloaded release}
-output_dir=${OUTPUT_DIR:-outputs/m3_simple_fixed_skins_40k_20260917}
+output_dir=${OUTPUT_DIR:-outputs/m3_simple_pretrained_fixed_skins_40k_20260918}
 staging_dir=${PLOT_CHECKPOINT_STAGING_DIR:?Set PLOT_CHECKPOINT_STAGING_DIR}
+backbone_checkpoint=${M3_BACKBONE_CHECKPOINT:-checkpoints/m3_backbone/model.safetensors}
 train_index=${M3_WINDOW_INDEX:-$dataset_root/derived/m3/validated/train_c65.pt}
 val_index=${M3_VAL_WINDOW_INDEX:-$dataset_root/derived/m3/validated/val_id_c65.pt}
 chunk_cache_root=${M3_CHUNK_CACHE_ROOT:-}
@@ -25,7 +26,8 @@ fi
 
 for required_path in \
   "$dataset_root" "$train_index" "$val_index" \
-  derived/common/block_vocabulary.json checkpoints/pixel_vae/model.safetensors; do
+  derived/common/block_vocabulary.json checkpoints/pixel_vae/model.safetensors \
+  "$backbone_checkpoint"; do
   if [[ ! -e "$required_path" ]]; then
     echo "Required path does not exist: $required_path" >&2
     exit 1
@@ -49,10 +51,12 @@ CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES" \
   --vocabulary derived/common/block_vocabulary.json \
   --pixel-vae checkpoints/pixel_vae/model.safetensors \
   --latent-normalization pixel-vae \
+  --backbone-checkpoint "$backbone_checkpoint" \
   --output-dir "$output_dir" \
   --checkpoint-staging-dir "$staging_dir" \
   --checkpoint-errors raise \
   --simple-m3 \
+  --qk-rms-norm \
   --player-reference-token-grid 4 2 \
   --player-reference-position-encoding \
   --actor-channels 32 \
@@ -72,5 +76,5 @@ CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES" \
   --visualization-denoising-steps "${VISUALIZATION_DENOISING_STEPS:-20}" \
   --wandb-entity "${WANDB_ENTITY:-ckx23-tsinghua-university}" \
   --wandb-project "${WANDB_PROJECT:-plot-m3}" \
-  --wandb-name "${WANDB_NAME:-m3-simple-fixed-skins-40k}" \
+  --wandb-name "${WANDB_NAME:-m3-simple-pretrained-fixed-skins-40k}" \
   --wandb-mode "${WANDB_MODE:-online}"

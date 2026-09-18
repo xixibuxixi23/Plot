@@ -151,6 +151,12 @@ target resident's death. Public files remain continuous and unmodified.
 weights and reports every missing/skipped key. This is an initialization, not
 a full resume: PLOT's new resident encoder and block vocabulary embedding need
 training. The VAE checkpoint must match the 2DAction default ViTVaeArgs.
+For M3-Simple, the old joint patch projection is expanded rather than skipped:
+all old latent/raster input channels are copied exactly and the appended
+resident/appearance channel weights start at zero. The pretrained recipe also
+enables `--qk-rms-norm`, matching the old denoiser whose QK scale parameters are
+loaded with all 12 DiT blocks and the output head. The whole model remains
+trainable; this is not a frozen-backbone stage.
 
 `--deep-condition-reinjection` adds a residual condition adapter before every
 DiT block. Each adapter receives spatially aligned 3D raster and resident-map

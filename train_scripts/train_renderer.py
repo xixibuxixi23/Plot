@@ -394,6 +394,10 @@ def main():
     parser.add_argument("--context-frames", type=int, default=65)
     parser.add_argument("--cache-frames", type=int, default=64)
     parser.add_argument("--block-frames", type=int, default=8)
+    parser.add_argument(
+        "--qk-rms-norm", action="store_true",
+        help="Apply the QK RMSNorm used by the pretrained 2DAction denoiser",
+    )
     parser.add_argument("--hidden-size", type=int, default=1024)
     parser.add_argument("--depth", type=int, default=12)
     parser.add_argument("--heads", type=int, default=16)
@@ -765,6 +769,7 @@ def main():
         context_frames=args.context_frames,
         cache_frames=args.cache_frames,
         block_frames=args.block_frames,
+        qk_rms_norm=args.qk_rms_norm,
         hidden_size=args.hidden_size,
         depth=args.depth,
         num_heads=args.heads,

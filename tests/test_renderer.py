@@ -32,11 +32,12 @@ from train_scripts.train_renderer import (
 torch.set_num_threads(2)
 
 
-def tiny_model(*, simple_conditioning=False):
+def tiny_model(*, simple_conditioning=False, qk_rms_norm=False):
     torch.manual_seed(42)
     model = Renderer(RendererArgs(3, 8, input_h=4, input_w=4, hidden_size=32, depth=2,
                                  num_heads=4, voxel_channels=4, condition_dim=16, actor_channels=4,
                                  context_frames=65, cache_frames=16,
+                                 qk_rms_norm=qk_rms_norm,
                                  gradient_checkpointing=False, gpu_rasterizer=False,
                                  simple_conditioning=simple_conditioning,
                                  unified_player_reference=simple_conditioning,
@@ -52,6 +53,33 @@ def tiny_model(*, simple_conditioning=False):
         if model.core.actor_condition_embedder is not None:
             model.core.actor_condition_embedder.weight.normal_(std=.03)
     return model
+
+
+def test_2daction_backbone_expands_joint_input_without_changing_old_path():
+    source = tiny_model(qk_rms_norm=True)
+    target = tiny_model(simple_conditioning=True, qk_rms_norm=True)
+    source_state = {f"core.{key}": value.clone() for key, value in source.core.state_dict().items()}
+    old_projection = source.core.x_embedder.proj.weight.detach().clone()
+    report = target.load_2daction_backbone(source_state)
+
+    new_projection = target.core.x_embedder.proj.weight.detach()
+    old_channels = old_projection.shape[1]
+    torch.testing.assert_close(new_projection[:, :old_channels], old_projection)
+    torch.testing.assert_close(
+        new_projection[:, old_channels:], torch.zeros_like(new_projection[:, old_channels:])
+    )
+    assert report["partially_loaded"] == [{
+        "key": "x_embedder.proj.weight",
+        "source_shape": list(old_projection.shape),
+        "target_shape": list(new_projection.shape),
+        "new_input_channels_initialized_to_zero": new_projection.shape[1] - old_channels,
+    }]
+    assert "x_embedder.proj.weight" not in report["missing"]
+    assert not any(key.startswith("blocks.") for key in report["missing"])
+    torch.testing.assert_close(
+        target.core.blocks[0].s_attn.q_rms_norm.gamma,
+        source.core.blocks[0].s_attn.q_rms_norm.gamma,
+    )
 
 
 def conditions(t=17):

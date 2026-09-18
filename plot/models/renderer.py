@@ -35,6 +35,7 @@ class RendererArgs:
     context_frames: int = 65
     cache_frames: int = 64
     block_frames: int = 8
+    qk_rms_norm: bool = False
     gradient_checkpointing: bool = True
     gpu_rasterizer: bool = True
     deep_condition_reinjection: bool = False
@@ -253,6 +254,7 @@ class Renderer(nn.Module):
             ),
             context_window_size=cfg.context_frames, cache_window_size=cfg.cache_frames,
             voxel_dim=48, is_causal=True, causal_block_size=cfg.block_frames,
+            qk_rms_norm=cfg.qk_rms_norm,
             # M3-Simple uses diffusion time alone for clean/noisy status.
             # Keep the old embedding only for legacy renderer checkpoints.
             use_condition_mask=not cfg.simple_conditioning,
@@ -417,18 +419,48 @@ class Renderer(nn.Module):
         self.core.commit_kv_candidates(candidates, frame_index)
 
     def load_2daction_backbone(self, state: dict):
-        """Transfer compatible DiT tensors, explicitly report every rejected key."""
+        """Transfer the old denoiser while preserving its latent/voxel input path.
+
+        M3-Simple appends resident and ROI-appearance channels after the old
+        latent+raster channels.  Expand that one projection explicitly instead
+        of discarding it: the old path is copied bit-for-bit and new condition
+        channels initially contribute zero.  They become trainable immediately.
+        """
         current = self.core.state_dict()
-        accepted, skipped = {}, []
+        accepted, skipped, partially_loaded = {}, [], []
         for key, value in state.items():
             original = key
             for prefix in ("_orig_mod.", "denoiser.", "core."):
                 key = key.removeprefix(prefix)
             if key in current and value.shape == current[key].shape:
                 accepted[key] = value
+            elif (
+                key == "x_embedder.proj.weight"
+                and key in current
+                and value.ndim == current[key].ndim == 4
+                and value.shape[0] == current[key].shape[0]
+                and value.shape[2:] == current[key].shape[2:]
+                and value.shape[1] < current[key].shape[1]
+            ):
+                expanded = value.new_zeros(current[key].shape)
+                expanded[:, : value.shape[1]].copy_(value)
+                accepted[key] = expanded
+                partially_loaded.append({
+                    "key": key,
+                    "source_shape": list(value.shape),
+                    "target_shape": list(current[key].shape),
+                    "new_input_channels_initialized_to_zero": (
+                        current[key].shape[1] - value.shape[1]
+                    ),
+                })
             else:
                 skipped.append(original)
         if not accepted:
             raise ValueError("checkpoint has no compatible 2DAction DiT tensors")
         missing = self.core.load_state_dict(accepted, strict=False).missing_keys
-        return {"loaded": len(accepted), "missing": missing, "skipped": skipped}
+        return {
+            "loaded": len(accepted),
+            "partially_loaded": partially_loaded,
+            "missing": missing,
+            "skipped": skipped,
+        }
