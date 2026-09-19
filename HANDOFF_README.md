@@ -2,6 +2,8 @@
 入口、接收方式和优化器重置语义见 [续训交接](docs/runs/m3_qk_lr_continuation_20260919.md)。
 使用专用 `train_m3_qk_lr_continue_7gpu.sh`；下方保留基线版本的历史说明。
 新机器从零安装环境、下载数据和VAE见 [新机器部署](docs/m3_new_machine.md)。
+另一位H20合作伙伴可用[离线环境包部署](docs/m3_h20_offline_environment.md)，只下载解压，
+不绑定本分支的续训方案、父检查点或7卡设置。
 
 # M3-Simple 实验说明
 
