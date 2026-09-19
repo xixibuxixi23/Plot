@@ -1,3 +1,7 @@
+本分支（2026-09-19）用于远程 `9v021ve5` 开启QK并降LR至3e-5的权重续训。
+入口、接收方式和优化器重置语义见 [续训交接](docs/runs/m3_qk_lr_continuation_20260919.md)。
+使用专用 `train_m3_qk_lr_continue_7gpu.sh`；下方保留基线版本的历史说明。
+
 # M3-Simple 实验说明
 
 ## 实验目标

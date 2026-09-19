@@ -35,6 +35,7 @@ class RendererArgs:
     context_frames: int = 65
     cache_frames: int = 64
     block_frames: int = 8
+    qk_rms_norm: bool = False
     gradient_checkpointing: bool = True
     gpu_rasterizer: bool = True
     deep_condition_reinjection: bool = False
@@ -253,6 +254,7 @@ class Renderer(nn.Module):
             ),
             context_window_size=cfg.context_frames, cache_window_size=cfg.cache_frames,
             voxel_dim=48, is_causal=True, causal_block_size=cfg.block_frames,
+            qk_rms_norm=cfg.qk_rms_norm,
             # M3-Simple uses diffusion time alone for clean/noisy status.
             # Keep the old embedding only for legacy renderer checkpoints.
             use_condition_mask=not cfg.simple_conditioning,

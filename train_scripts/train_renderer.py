@@ -29,6 +29,7 @@ from plot.models.player_identity import PlayerIdentityEncoder
 from plot.checkpoint_io import record_checkpoint_failure, staged_torch_save
 from plot.training.renderer_monitoring import render_probe, save_probe_manifest, select_renderer_probes
 from plot.training.renderer_trainer import renderer_training_losses
+from plot.training.qk_warm_start import load_qk_warm_start
 
 
 LOSS_NAMES = (
@@ -233,6 +234,10 @@ def main():
         "--warm-start",
         help="Load model weights without optimizer state; intended for compatible architecture changes",
     )
+    parser.add_argument(
+        "--warm-start-enable-qk-rms-norm", action="store_true",
+        help="Strictly migrate a no-QK Simple checkpoint; reset optimizer and inherit step",
+    )
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--window-index")
     parser.add_argument(
@@ -394,6 +399,10 @@ def main():
     parser.add_argument("--context-frames", type=int, default=65)
     parser.add_argument("--cache-frames", type=int, default=64)
     parser.add_argument("--block-frames", type=int, default=8)
+    parser.add_argument(
+        "--qk-rms-norm", action="store_true",
+        help="Enable QK RMSNorm in the spatial and temporal DiT attention blocks",
+    )
     parser.add_argument("--hidden-size", type=int, default=1024)
     parser.add_argument("--depth", type=int, default=12)
     parser.add_argument("--heads", type=int, default=16)
@@ -512,6 +521,13 @@ def main():
         parser.error("--prefetch-factor must be positive")
     if sum(bool(path) for path in (args.resume, args.warm_start, args.backbone_checkpoint)) > 1:
         parser.error("--resume, --warm-start, and --backbone-checkpoint are mutually exclusive")
+    if args.warm_start_enable_qk_rms_norm:
+        if not (args.warm_start and args.simple_m3 and args.qk_rms_norm):
+            parser.error("QK migration requires --warm-start, --simple-m3 and --qk-rms-norm")
+        if args.loss_mode != "flow" or args.freeze_base_for_appearance or args.freeze_base_for_reference:
+            parser.error("QK migration requires full-network flow training")
+        if args.allow_item_vocabulary_extension:
+            parser.error("QK migration cannot also extend the item vocabulary")
     if args.freeze_base_for_appearance and not args.view_aware_appearance:
         parser.error("--freeze-base-for-appearance requires --view-aware-appearance")
     if args.detail_preserving_appearance and not args.view_aware_appearance:
@@ -765,6 +781,7 @@ def main():
         context_frames=args.context_frames,
         cache_frames=args.cache_frames,
         block_frames=args.block_frames,
+        qk_rms_norm=args.qk_rms_norm,
         hidden_size=args.hidden_size,
         depth=args.depth,
         num_heads=args.heads,
@@ -890,6 +907,7 @@ def main():
             "total_parameters": sum(p.numel() for p in raw_model.parameters()),
         }))
     start_step = 0
+    qk_migration = None
     if args.resume:
         resume_report = load_renderer_resume(
             raw_model,
@@ -901,6 +919,17 @@ def main():
         start_step = int(checkpoint["step"])
         if rank == 0:
             print(json.dumps({"resume": str(args.resume), **resume_report}))
+    elif args.warm_start_enable_qk_rms_norm:
+        qk_migration = load_qk_warm_start(
+            raw_model, checkpoint,
+            item_vocabulary=dataset.item_vocabulary,
+            class_to_raw=dataset.vocabulary.class_to_raw,
+        )
+        start_step = qk_migration["parent_step"]
+        if args.steps <= start_step:
+            raise ValueError("--steps is the cumulative target and must exceed the parent step")
+        if rank == 0:
+            print(json.dumps({"warm_start": args.warm_start, "lr": args.lr, **qk_migration}))
     elif args.warm_start:
         warm_state = dict(checkpoint["model"])
         migrated_parameters = []
@@ -976,6 +1005,8 @@ def main():
         "item_vocabulary": dataset.item_vocabulary,
         "class_to_raw": dataset.vocabulary.class_to_raw,
     }
+    if qk_migration is not None:
+        run_config["qk_migration"] = qk_migration
     if rank == 0:
         (output / "config.json").write_text(json.dumps(run_config, indent=2))
     run = None

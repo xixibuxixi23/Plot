@@ -1,4 +1,4 @@
-from dataclasses import replace
+from dataclasses import asdict, replace
 from types import SimpleNamespace
 import numpy as np
 import pytest
@@ -32,11 +32,12 @@ from train_scripts.train_renderer import (
 torch.set_num_threads(2)
 
 
-def tiny_model(*, simple_conditioning=False):
+def tiny_model(*, simple_conditioning=False, qk_rms_norm=False):
     torch.manual_seed(42)
     model = Renderer(RendererArgs(3, 8, input_h=4, input_w=4, hidden_size=32, depth=2,
                                  num_heads=4, voxel_channels=4, condition_dim=16, actor_channels=4,
                                  context_frames=65, cache_frames=16,
+                                 qk_rms_norm=qk_rms_norm,
                                  gradient_checkpointing=False, gpu_rasterizer=False,
                                  simple_conditioning=simple_conditioning,
                                  unified_player_reference=simple_conditioning,
@@ -1185,3 +1186,82 @@ def test_kv_cache_uses_requested_inference_dtype():
     assert all(cache["k"].dtype == torch.bfloat16 for cache in model.core.kv_caches)
     assert all(cache["v"].dtype == torch.bfloat16 for cache in model.core.kv_caches)
     model.clear_cache()
+
+
+# Architecture-changing continuation must preserve every old tensor, and may
+# initialize only the spatial/temporal QK norm gains added by the new config.
+def qk_parent_checkpoint(source):
+    renderer_config = asdict(source.cfg)
+    renderer_config.pop("qk_rms_norm")  # original 9373a67 checkpoints lack it
+    return {
+        "model": {k: v.clone() for k, v in source.state_dict().items()},
+        "step": 15500,
+        "config": {"renderer": renderer_config,
+                   "item_vocabulary": {"pick": 1}, "class_to_raw": (10, 20, 30)},
+    }
+
+
+def test_qk_warm_start_preserves_weights_and_supports_training_and_resume():
+    from plot.training.qk_warm_start import load_qk_warm_start
+    source = tiny_model(simple_conditioning=True)
+    checkpoint = qk_parent_checkpoint(source)
+    target = tiny_model(simple_conditioning=True, qk_rms_norm=True)
+    optimizer = torch.optim.AdamW(target.parameters(), lr=3e-5)
+    report = load_qk_warm_start(
+        target, checkpoint, item_vocabulary={"pick": 1}, class_to_raw=(10, 20, 30),
+    )
+    assert report["parent_step"] == 15500
+    assert report["optimizer_state"] == "reset"
+    assert not optimizer.state
+    assert len(report["initialized_parameters"]) == 4 * target.cfg.depth
+    for key, value in checkpoint["model"].items():
+        torch.testing.assert_close(target.state_dict()[key], value, rtol=0, atol=0)
+    for key in report["initialized_parameters"]:
+        torch.testing.assert_close(target.state_dict()[key], torch.ones_like(target.state_dict()[key]))
+    cond = conditions(17)
+    x, time = torch.randn(1, 17, 16, 4, 4), torch.rand(1, 17)
+    prediction = target(x, time, cond)
+    assert torch.isfinite(prediction).all()
+    prediction.square().mean().backward()
+    for block in target.core.blocks:
+        for attention in (block.s_attn, block.t_attn):
+            assert attention.qk_rms_norm
+            for norm in (attention.q_rms_norm, attention.k_rms_norm):
+                assert norm.gamma.grad is not None
+                assert torch.isfinite(norm.gamma.grad).all()
+    optimizer.step()
+    assert optimizer.param_groups[0]["lr"] == 3e-5
+    # A newly saved QK model uses ordinary strict resume thereafter.
+    resumed = tiny_model(simple_conditioning=True, qk_rms_norm=True)
+    resumed.load_state_dict(target.state_dict(), strict=True)
+    next_optimizer = torch.optim.AdamW(resumed.parameters(), lr=1e-4)
+    next_optimizer.load_state_dict(optimizer.state_dict())
+    assert next_optimizer.param_groups[0]["lr"] == 3e-5
+
+
+@pytest.mark.parametrize("defect", ["missing", "unexpected", "shape", "config", "item_ids", "voxel_ids", "already_qk"])
+def test_qk_warm_start_rejects_unrelated_changes_before_loading(defect):
+    from plot.training.qk_warm_start import load_qk_warm_start
+    source = tiny_model(simple_conditioning=True)
+    checkpoint = qk_parent_checkpoint(source)
+    target = tiny_model(simple_conditioning=True, qk_rms_norm=True)
+    key = "core.blocks.0.s_attn.to_qkv.weight"
+    if defect == "missing":
+        checkpoint["model"].pop(key)
+    elif defect == "unexpected":
+        checkpoint["model"]["unrelated.weight"] = torch.ones(1)
+    elif defect == "shape":
+        checkpoint["model"][key] = checkpoint["model"][key][:1]
+    elif defect == "config":
+        checkpoint["config"]["renderer"]["cache_frames"] = 32
+    elif defect == "item_ids":
+        checkpoint["config"]["item_vocabulary"] = {"pick": 2}
+    elif defect == "voxel_ids":
+        checkpoint["config"]["class_to_raw"] = (20, 10, 30)
+    else:
+        checkpoint["config"]["renderer"]["qk_rms_norm"] = True
+    before = {k: v.clone() for k, v in target.state_dict().items()}
+    with pytest.raises((ValueError, RuntimeError)):
+        load_qk_warm_start(target, checkpoint, item_vocabulary={"pick": 1}, class_to_raw=(10, 20, 30))
+    for key, value in before.items():
+        torch.testing.assert_close(target.state_dict()[key], value, rtol=0, atol=0)
