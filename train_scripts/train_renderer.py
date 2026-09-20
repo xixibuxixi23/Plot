@@ -120,6 +120,7 @@ def load_renderer_resume(
     item_vocabulary,
     *,
     allow_item_vocabulary_extension=False,
+    optimizer_lrs=None,
 ):
     """Strictly resume M3, optionally appending new item embedding rows.
 
@@ -149,7 +150,24 @@ def load_renderer_resume(
     if saved_embedding.shape == current_embedding.shape:
         model.load_state_dict(saved_model, strict=True)
         optimizer.load_state_dict(checkpoint["optimizer"])
-        return {"item_vocabulary_extended": False, "new_items": {}}
+        saved_lrs = [float(group["lr"]) for group in optimizer.param_groups]
+        if optimizer_lrs is not None:
+            if len(optimizer_lrs) != len(optimizer.param_groups):
+                raise RuntimeError(
+                    "resume LR override group count differs: "
+                    f"checkpoint={len(optimizer.param_groups)} "
+                    f"requested={len(optimizer_lrs)}"
+                )
+            for group, lr in zip(optimizer.param_groups, optimizer_lrs):
+                group["lr"] = float(lr)
+        return {
+            "item_vocabulary_extended": False,
+            "new_items": {},
+            "optimizer_saved_lrs": saved_lrs,
+            "optimizer_active_lrs": [
+                float(group["lr"]) for group in optimizer.param_groups
+            ],
+        }
 
     compatible_shape = (
         saved_embedding.ndim == current_embedding.ndim
@@ -186,6 +204,16 @@ def load_renderer_resume(
     saved_model[embedding_key] = expanded_embedding
     model.load_state_dict(saved_model, strict=True)
     optimizer.load_state_dict(checkpoint["optimizer"])
+    saved_lrs = [float(group["lr"]) for group in optimizer.param_groups]
+    if optimizer_lrs is not None:
+        if len(optimizer_lrs) != len(optimizer.param_groups):
+            raise RuntimeError(
+                "resume LR override group count differs: "
+                f"checkpoint={len(optimizer.param_groups)} "
+                f"requested={len(optimizer_lrs)}"
+            )
+        for group, lr in zip(optimizer.param_groups, optimizer_lrs):
+            group["lr"] = float(lr)
 
     embedding_parameter = dict(model.named_parameters())[embedding_key]
     optimizer_state = optimizer.state.get(embedding_parameter, {})
@@ -199,6 +227,10 @@ def load_renderer_resume(
         "old_embedding_rows": saved_embedding.shape[0],
         "new_embedding_rows": current_embedding.shape[0],
         "new_items": dict(sorted(new_items.items(), key=lambda pair: pair[1])),
+        "optimizer_saved_lrs": saved_lrs,
+        "optimizer_active_lrs": [
+            float(group["lr"]) for group in optimizer.param_groups
+        ],
     }
 
 
@@ -291,6 +323,22 @@ def main():
         help="Total sampling multiplicity for windows containing a non-full-health target",
     )
     parser.add_argument("--resume")
+    parser.add_argument(
+        "--override-resume-lr",
+        action="store_true",
+        help=(
+            "After restoring AdamW state, replace checkpoint learning rates with "
+            "the rates constructed from --lr and --unfrozen-base-lr-scale"
+        ),
+    )
+    parser.add_argument(
+        "--train-sampler-seed",
+        type=int,
+        help=(
+            "Independent shuffled-training sampler seed; defaults to --seed so "
+            "validation/probe randomness can remain fixed across a data-order restart"
+        ),
+    )
     parser.add_argument(
         "--allow-item-vocabulary-extension",
         action="store_true",
@@ -521,6 +569,10 @@ def main():
         parser.error("--prefetch-factor must be positive")
     if sum(bool(path) for path in (args.resume, args.warm_start, args.backbone_checkpoint)) > 1:
         parser.error("--resume, --warm-start, and --backbone-checkpoint are mutually exclusive")
+    if args.override_resume_lr and not args.resume:
+        parser.error("--override-resume-lr requires --resume")
+    if args.train_sampler_seed is not None and args.train_sampler_seed < 0:
+        parser.error("--train-sampler-seed must be nonnegative")
     if args.warm_start_enable_qk_rms_norm:
         if not (args.warm_start and args.simple_m3 and args.qk_rms_norm):
             parser.error("QK migration requires --warm-start, --simple-m3 and --qk-rms-norm")
@@ -720,8 +772,14 @@ def main():
         args.vocabulary,
         **dataset_kwargs,
     )
+    train_sampler_seed = (
+        args.seed if args.train_sampler_seed is None else args.train_sampler_seed
+    )
     sampler = (
-        DistributedSampler(dataset, num_replicas=world, rank=rank, shuffle=True, seed=args.seed)
+        DistributedSampler(
+            dataset, num_replicas=world, rank=rank, shuffle=True,
+            seed=train_sampler_seed,
+        )
         if world > 1
         else None
     )
@@ -901,6 +959,9 @@ def main():
         ])
     else:
         optimizer = torch.optim.AdamW(trainable_parameters, lr=args.lr)
+    requested_optimizer_lrs = [
+        float(group["lr"]) for group in optimizer.param_groups
+    ]
     if rank == 0:
         print(json.dumps({
             "trainable_parameters": sum(p.numel() for p in trainable_parameters),
@@ -915,6 +976,9 @@ def main():
             checkpoint,
             dataset.item_vocabulary,
             allow_item_vocabulary_extension=args.allow_item_vocabulary_extension,
+            optimizer_lrs=(
+                requested_optimizer_lrs if args.override_resume_lr else None
+            ),
         )
         start_step = int(checkpoint["step"])
         if rank == 0:
@@ -1085,6 +1149,8 @@ def main():
     epoch = 0
     counterfactual_epoch = 0
     auxiliary_weights = effective_auxiliary_loss_weights(args)
+    train_total_loss_ema = None
+    train_total_loss_ema_decay = 0.99
     loss_kwargs = {
         "frames_per_sample": args.pixel_loss_frames,
         "entity_pixel_l1_weight": auxiliary_weights["entity_pixel_l1_weight"],
@@ -1281,6 +1347,14 @@ def main():
         if world > 1:
             dist.all_reduce(reduced)
             reduced /= world
+        if rank == 0:
+            reduced_total_loss = float(reduced[0])
+            train_total_loss_ema = (
+                reduced_total_loss
+                if train_total_loss_ema is None
+                else train_total_loss_ema_decay * train_total_loss_ema
+                + (1 - train_total_loss_ema_decay) * reduced_total_loss
+            )
         log_now = step == 1 or step % args.log_every == 0
         if log_now:
             local_memory = torch.tensor(
@@ -1301,6 +1375,7 @@ def main():
             train_log = {
                 **{f"train/{name}": float(reduced[index])
                    for index, name in enumerate(LOSS_NAMES)},
+                "train/total_loss_ema_099": train_total_loss_ema,
                 "train/learning_rate": optimizer.param_groups[0]["lr"],
                 "train/cuda_memory_allocated_max_gib": float(memory_by_rank[:, 0].max()),
                 "train/cuda_peak_allocated_max_gib": float(memory_by_rank[:, 1].max()),

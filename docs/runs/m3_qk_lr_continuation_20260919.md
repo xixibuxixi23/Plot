@@ -95,6 +95,27 @@ W&B和config.json会保存`qk_migration`报告。检查
 当前训练配方不改变验证选样，以便保留旧run的对照；全面离线评估同时作用于
 新旧checkpoint。记录新commit、run URL、parent路径/哈希、输出、环境和GPU分配。
 
+## 背景精修重启
+
+若固定验证与背景probe仍在改善、但希望降低成熟阶段的更新幅度，使用
+`train_m3_qk_background_refine_7gpu.sh`从本run最近完整checkpoint普通恢复。
+该recipe保留AdamW moments，将恢复后的实际LR显式覆盖为`1e-5`，并为训练
+sampler使用独立seed，避免新进程再次从`seed=0`的相同窗口排列开头重放；验证
+和固定probe仍使用原`seed=0`，可与前一run直接比较。输出目录和W&B run必须新建。
+
+```bash
+export RESUME=/path/to/qk_lr_continue/step_NNNNNNN.pt
+export OUTPUT_DIR=/path/to/new/qk_background_refine_lr1e5
+export PLOT_CHECKPOINT_STAGING_DIR=/path/to/new/staging
+export CUDA_VISIBLE_DEVICES='REPLACE_WITH_7_FREE_GPU_IDS'
+export STEPS=40000
+bash train_scripts/recipes/m3/train_m3_qk_background_refine_7gpu.sh
+```
+
+启动日志必须同时报告原checkpoint LR为`3e-5`、active LR为`1e-5`。W&B新增
+`train/total_loss_ema_099`用于观察趋势；即时loss仍保留。不要对已含QK参数的
+checkpoint再次使用`--warm-start-enable-qk-rms-norm`。
+
 本地验证命令：
 
 ```bash
