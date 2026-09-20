@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 import json
 from pathlib import Path
+import subprocess
 from typing import Iterable
 
 import cv2
@@ -116,7 +117,7 @@ def write_comparison_video(
     *,
     fps: float = 8.0,
 ) -> Path:
-    """Write GT | prediction, with supervised regions outlined."""
+    """Write a browser-compatible H.264 GT | prediction comparison video."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     gt = (ground_truth.detach().float().cpu().clamp(0, 1).permute(0, 2, 3, 1).numpy() * 255).astype(
@@ -127,9 +128,18 @@ def write_comparison_video(
     )
     weights = region_weight.detach().float().cpu().numpy()
     h, w = gt.shape[1:3]
-    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w * 2, h))
-    if not writer.isOpened():
-        raise RuntimeError(f"OpenCV could not create video {path}")
+    command = (
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-f", "rawvideo", "-pixel_format", "bgr24",
+        "-video_size", f"{w * 2}x{h}", "-framerate", str(fps),
+        "-i", "pipe:0", "-an", "-c:v", "libx264",
+        "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart", str(path),
+    )
+    try:
+        encoder = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    except FileNotFoundError as exc:
+        raise RuntimeError("ffmpeg is required to write H.264 visualization videos") from exc
     try:
         for index, (truth, estimate) in enumerate(zip(gt, pred)):
             mask = cv2.resize(
@@ -145,9 +155,17 @@ def write_comparison_video(
                 ),
                 axis=1,
             )
-            writer.write(panel)
-    finally:
-        writer.release()
+            encoder.stdin.write(panel.tobytes())
+        encoder.stdin.close()
+        error = encoder.stderr.read().decode("utf-8", errors="replace")
+        return_code = encoder.wait()
+    except Exception:
+        encoder.kill()
+        encoder.wait()
+        raise
+    if return_code:
+        path.unlink(missing_ok=True)
+        raise RuntimeError(f"ffmpeg could not create video {path}: {error.strip()}")
     return path
 
 
@@ -161,29 +179,37 @@ def render_probe(
         raise ValueError("precision must be bf16 or fp32")
     device = next(model.parameters()).device
     rgb = sample["rgb"][:, :65].to(device)
+    frames = rgb.shape[1]
+    if frames < 1 + model.cfg.block_frames or (frames - 1) % model.cfg.block_frames:
+        raise ValueError("visualization requires a prefix and complete output blocks")
     conditions = {key: value.to(device) for key, value in sample["conditions"].items()}
-    conditions = slice_conditions(conditions, 0, 65)
+    conditions = slice_conditions(conditions, 0, frames)
     use_bf16 = precision == "bf16" and device.type == "cuda"
     with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=use_bf16):
-        latent = codec.encode(rgb)
+        latent = codec.encode(rgb[:, :1])
         generator = torch.Generator(device=device).manual_seed(seed)
         noise = torch.randn(
-            latent[:, 1:65].shape, device=device, dtype=latent.dtype, generator=generator
+            (len(latent), frames - 1, *latent.shape[2:]),
+            device=device, dtype=latent.dtype, generator=generator
         )
         rollout = RendererRollout(model, denoising_steps=denoising_steps)
         try:
             rollout.start(latent[:, :1], slice_conditions(conditions, 0, 1))
-            predicted_latent = rollout.generate_64(noise, slice_conditions(conditions, 1, 65))
+            predicted_latent = torch.cat([
+                rollout.generate(noise[:, start - 1:start - 1 + model.cfg.block_frames],
+                                 slice_conditions(conditions, start, start + model.cfg.block_frames))
+                for start in range(1, frames, model.cfg.block_frames)
+            ], dim=1)
             prediction = codec.decode(predicted_latent)[0]
         finally:
             model.clear_cache()
-    truth = rgb[0, 1:65]
-    weight = sample["region_weight"][0, 1:65]
+    truth = rgb[0, 1:frames]
+    weight = sample["region_weight"][0, 1:frames]
     write_comparison_video(output_path, truth, prediction, weight)
     error = (prediction.float() - truth.float()).abs()
     mse = error.square().mean().clamp_min(1e-12)
     if "pixel_region_mask" in sample:
-        entity_mask = sample["pixel_region_mask"][0, 1:65].to(device).float()
+        entity_mask = sample["pixel_region_mask"][0, 1:frames].to(device).float()
     else:
         entity_mask = (weight > 1).to(device).float()
     entity_l1 = (error * entity_mask).sum() / (
@@ -200,7 +226,7 @@ def render_probe(
         "health_l1": float(health_l1),
     }
     if "player_region_mask" in sample:
-        player_mask = sample["player_region_mask"][0, 1:65].to(device).float()
+        player_mask = sample["player_region_mask"][0, 1:frames].to(device).float()
         player_pixels = player_mask.sum()
         if player_pixels > 0:
             player_l1 = (error * player_mask).sum() / (player_pixels * error.shape[1])

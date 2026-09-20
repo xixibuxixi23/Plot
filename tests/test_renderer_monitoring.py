@@ -76,6 +76,9 @@ def test_comparison_video_is_written(tmp_path):
     try:
         assert int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)) == 48
         assert int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)) == 16
+        fourcc = int(capture.get(cv2.CAP_PROP_FOURCC))
+        codec = "".join(chr((fourcc >> (8 * index)) & 0xFF) for index in range(4))
+        assert codec.lower() in {"avc1", "h264"}
     finally:
         capture.release()
 

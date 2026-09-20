@@ -301,19 +301,22 @@ class TextAgentRendererDataset(Dataset):
             masks = data["instance_mask"][start:end, target]
             if masks.dtype != np.uint16:
                 raise ValueError("instance_mask must retain the raw uint16 entity IDs")
-            # Keep a separate mask for visible, non-camera human players.  The
-            # legacy entity mask also contains mobs, attachments and the
-            # first-person wield view, so it cannot measure appearance quality.
+            # Keep a separate mask for every visible, non-camera resident that
+            # has an explicit four-view appearance condition.  Resident agents
+            # may be stored as entity_kind="player" (Steve/Alex) or "npc"
+            # (villager/zombie/skeleton).  Restricting this mask to the former
+            # silently removed all NPC appearance supervision.  Iterating only
+            # entity_slots (agent0..agentN) still excludes unrelated mobs,
+            # attachments, objects and the first-person wield view.
             player_masks = np.zeros_like(masks, dtype=bool)
             identity_player_mask = np.zeros_like(masks[0], dtype=bool)
             identity_frame = 0
             identity_slot = 0
             identity_pixels = 0
-            if "entity_render_object_id" in data and "entity_kind" in data:
+            if "entity_render_object_id" in data:
                 render_ids = data["entity_render_object_id"][start:end, entity_slots]
-                entity_kinds = data["entity_kind"].astype(str)
                 for slot, entity_slot in enumerate(entity_slots):
-                    if slot == target or entity_kinds[entity_slot] != "player":
+                    if slot == target:
                         continue
                     ids = render_ids[:, slot]
                     valid_ids = (ids > 0) & (ids != np.iinfo(np.uint16).max)

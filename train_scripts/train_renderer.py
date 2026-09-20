@@ -27,13 +27,18 @@ from plot.models.renderer_codec import RendererCodec
 from plot.models.latent_normalization import resolve_training_normalization
 from plot.models.player_identity import PlayerIdentityEncoder
 from plot.checkpoint_io import record_checkpoint_failure, staged_torch_save
-from plot.training.renderer_monitoring import render_probe, save_probe_manifest, select_renderer_probes
+from plot.training.renderer_monitoring import RendererProbe, render_probe, save_probe_manifest, select_renderer_probes
+from plot.training.renderer_optimizer import build_full_player_optimizer
+from plot.training.renderer_diagnostics import (
+    PLAYER_DIAGNOSTIC_KEYS, pack_player_diagnostics, summarize_player_diagnostics,
+)
 from plot.training.renderer_trainer import renderer_training_losses
 
 
 LOSS_NAMES = (
     "total_loss",
     "flow_loss",
+    "player_flow_loss",
     "auxiliary_loss",
     "entity_pixel_l1",
     "entity_pixel_edge",
@@ -440,6 +445,7 @@ def main():
     parser.add_argument("--validate-every", type=int, default=1000)
     parser.add_argument("--visualize-every", type=int, default=1000)
     parser.add_argument("--visualization-denoising-steps", type=int, default=20)
+    parser.add_argument("--visualization-probe-manifest", help="Explicit qualitative probes, including labelled train/held-out short clips")
     parser.add_argument("--val-batches", type=int, default=16)
     parser.add_argument("--log-every", type=int, default=20)
     parser.add_argument("--gradient-accumulation", type=int, default=1)
@@ -458,6 +464,10 @@ def main():
         type=float,
         default=1.0,
         help="Multiplier on latent flow loss; use 0 for decoded-pixel-only adaptation",
+    )
+    parser.add_argument(
+        "--player-flow-loss-weight", type=float, default=0.0,
+        help="Independent mask-normalized player latent flow loss, added to full-frame flow",
     )
     parser.add_argument(
         "--profile-local-step",
@@ -494,9 +504,13 @@ def main():
     )
     parser.add_argument(
         "--pixel-frame-selection",
-        choices=("mixed", "player"),
+        choices=("mixed", "player", "player_unique"),
         default="mixed",
         help="Choose decoded supervision frames from mixed signals or visible-player masks",
+    )
+    parser.add_argument(
+        "--log-player-noise-bins", action="store_true",
+        help="Log additive low/mid/high-noise player flow and pixel diagnostics across ranks",
     )
     parser.add_argument("--entity-pixel-l1-weight", type=float, default=0.5)
     parser.add_argument("--entity-pixel-edge-weight", type=float, default=0.2)
@@ -520,6 +534,10 @@ def main():
         help="prefix-player masking probability on grouped S11 steps",
     )
     parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument(
+        "--appearance-lr", type=float,
+        help="Full M3-Simple fine-tuning: appearance encoder, ROI projector and appended input columns use this LR; all other weights use --lr",
+    )
     parser.add_argument(
         "--unfrozen-base-lr-scale",
         type=float,
@@ -661,6 +679,15 @@ def main():
         parser.error("counterfactual difference loss requires grouped S11 data")
     if args.unfrozen_base_lr_scale <= 0:
         parser.error("--unfrozen-base-lr-scale must be positive")
+    if args.appearance_lr is not None:
+        if not args.simple_m3 or any((args.freeze_base_for_appearance,
+                                     args.freeze_base_for_reference,
+                                     args.freeze_base_for_player_appearance)):
+            parser.error("--appearance-lr requires --simple-m3 with the entire M3 trainable")
+        if not 0 < args.appearance_lr < float("inf") or not 0 < args.lr < float("inf"):
+            parser.error("learning rates must be finite and positive")
+    if args.visualization_probe_manifest and not args.val_window_index:
+        parser.error("--visualization-probe-manifest requires --val-window-index")
     if args.profile_local_step < 0:
         parser.error("--profile-local-step must be nonnegative")
     if args.profile_local_step and args.gradient_accumulation != 1:
@@ -703,6 +730,7 @@ def main():
         args.player_identity_negative_weight,
         args.counterfactual_player_difference_weight,
         args.flow_loss_weight,
+        args.player_flow_loss_weight,
     ) < 0:
         parser.error("region and pixel loss weights must be nonnegative")
     world = int(os.environ.get("WORLD_SIZE", "1"))
@@ -920,7 +948,11 @@ def main():
                     )
             parameter.requires_grad_(trainable)
     trainable_parameters = [p for p in raw_model.parameters() if p.requires_grad]
-    if (
+    if args.appearance_lr is not None:
+        optimizer = build_full_player_optimizer(
+            raw_model, base_lr=args.lr, appearance_lr=args.appearance_lr,
+        )
+    elif (
         args.freeze_base_for_reference
         and args.reference_unfreeze_last_spatial_blocks
         and args.unfrozen_base_lr_scale != 1
@@ -1054,6 +1086,12 @@ def main():
         "training": vars(args),
         "item_vocabulary": dataset.item_vocabulary,
         "class_to_raw": dataset.vocabulary.class_to_raw,
+        "optimizer_groups": [
+            {"name": group.get("name", f"group_{index}"),
+             "lr": group["lr"], "parameters": sum(p.numel() for p in group["params"]),
+             **{key: group[key] for key in ("appearance_lr", "appearance_input_channels") if key in group}}
+            for index, group in enumerate(optimizer.param_groups)
+        ],
     }
     if rank == 0:
         (output / "config.json").write_text(json.dumps(run_config, indent=2))
@@ -1119,7 +1157,10 @@ def main():
             **worker_kwargs,
         )
         if rank == 0 and args.visualize_every:
-            probes = select_renderer_probes(val_dataset)
+            probes = (
+                [RendererProbe(**row) for row in json.loads(Path(args.visualization_probe_manifest).read_text())]
+                if args.visualization_probe_manifest else select_renderer_probes(val_dataset)
+            )
             save_probe_manifest(probes, output / "visualizations" / "probes.json")
     elif rank == 0 and args.visualize_every:
         print(
@@ -1135,6 +1176,7 @@ def main():
     auxiliary_weights = effective_auxiliary_loss_weights(args)
     loss_kwargs = {
         "flow_loss_weight": args.flow_loss_weight,
+        "player_flow_loss_weight": args.player_flow_loss_weight,
         "frames_per_sample": args.pixel_loss_frames,
         "pixel_frame_selection": args.pixel_frame_selection,
         "entity_pixel_l1_weight": auxiliary_weights["entity_pixel_l1_weight"],
@@ -1153,6 +1195,7 @@ def main():
         ),
         "counterfactual_pure_noise": not args.counterfactual_random_timesteps,
     }
+    train_diagnostic_totals = torch.zeros(len(PLAYER_DIAGNOSTIC_KEYS), device=device)
     for step in range(start_step + 1, args.steps + 1):
         profile_this_step = args.profile_local_step == step - start_step
         profile_timings = {}
@@ -1219,6 +1262,7 @@ def main():
             _finish_profile_range(profile_timings, "vae_encode", encode_started, device)
             loss_forward_started = _start_profile_range(profile_this_step, device)
             conditions = {k: v.to(device) for k, v in batch["conditions"].items()}
+            flow_diagnostics = {} if args.log_player_noise_bins else None
             sync = (
                 model.no_sync()
                 if world > 1 and micro + 1 < args.gradient_accumulation
@@ -1250,6 +1294,7 @@ def main():
                         player_identity_slot=batch["player_identity_slot"].to(device),
                         player_identity_valid=batch["player_identity_valid"].to(device),
                         profile_timings=profile_timings if profile_this_step else None,
+                        flow_diagnostics=flow_diagnostics,
                         **{
                             **loss_kwargs,
                             "counterfactual_group_size": getattr(
@@ -1277,6 +1322,8 @@ def main():
                 )
             for name in LOSS_NAMES:
                 accumulated[name] += float(losses[name].detach()) / args.gradient_accumulation
+            if flow_diagnostics is not None:
+                train_diagnostic_totals.add_(pack_player_diagnostics(flow_diagnostics, device=device))
         clip_started = _start_profile_range(profile_this_step, device)
         torch.nn.utils.clip_grad_norm_(raw_model.parameters(), 1.0)
         _finish_profile_range(profile_timings, "grad_clip", clip_started, device)
@@ -1311,10 +1358,14 @@ def main():
             profile_timings["unattributed_wall"] = max(0.0, wall_total - accounted)
             report_names = ("data_wait_cpu", *exclusive_names, "unattributed_wall")
             report = {
+                "rank": rank,
+                "world_size": world,
                 "profiled_global_step": step,
                 "profiled_local_step": step - start_step,
                 "loss_mode": args.loss_mode,
                 "batch_size": args.batch_size,
+                "cuda_peak_allocated_gib": torch.cuda.max_memory_allocated(device) / 2**30,
+                "cuda_peak_reserved_gib": torch.cuda.max_memory_reserved(device) / 2**30,
                 "seconds": profile_timings,
                 "wall_percent": {
                     name: 100.0 * profile_timings.get(name, 0.0) / max(wall_total, 1e-12)
@@ -1331,7 +1382,15 @@ def main():
         if world > 1:
             dist.all_reduce(reduced)
             reduced /= world
-        log_now = step == 1 or step % args.log_every == 0
+        log_now = step == 1 or step % args.log_every == 0 or step == args.steps
+        diagnostic_log = {}
+        if log_now and args.log_player_noise_bins:
+            diagnostic_totals = train_diagnostic_totals.clone()
+            if world > 1:
+                dist.all_reduce(diagnostic_totals)
+            if rank == 0:
+                diagnostic_log = summarize_player_diagnostics(diagnostic_totals)
+            train_diagnostic_totals.zero_()
         if log_now:
             local_memory = torch.tensor(
                 [
@@ -1352,10 +1411,13 @@ def main():
                 **{f"train/{name}": float(reduced[index])
                    for index, name in enumerate(LOSS_NAMES)},
                 "train/learning_rate": optimizer.param_groups[0]["lr"],
+                **{f"train/lr_{group['name']}": group["lr"]
+                   for group in optimizer.param_groups if "name" in group},
                 "train/cuda_memory_allocated_max_gib": float(memory_by_rank[:, 0].max()),
                 "train/cuda_peak_allocated_max_gib": float(memory_by_rank[:, 1].max()),
                 "train/cuda_peak_reserved_max_gib": float(memory_by_rank[:, 2].max()),
                 "train/counterfactual_step": float(counterfactual_step),
+                **{f"train/{key}": value for key, value in diagnostic_log.items()},
             }
             memory_text = " ".join(
                 f"rank{index}_peak_reserved_gib={float(values[2]):.2f}"
@@ -1365,6 +1427,7 @@ def main():
                 f"step={step} source={'s11' if counterfactual_step else 'ordinary'} "
                 f"loss={train_log['train/total_loss']:.6f} "
                 f"flow={train_log['train/flow_loss']:.6f} "
+                f"player_flow={train_log['train/player_flow_loss']:.6f} "
                 f"entity_l1={train_log['train/entity_pixel_l1']:.6f} "
                 f"health_l1={train_log['train/health_pixel_l1']:.6f} "
                 f"identity={train_log['train/player_identity_loss']:.6f} "
@@ -1377,9 +1440,18 @@ def main():
             )
             if run:
                 run.log(train_log, step=step)
-        if val_loader is not None and (step % args.validate_every == 0 or step == args.steps):
+            with (output / "training.jsonl").open("a") as handle:
+                handle.write(json.dumps({"step": step, **train_log}) + "\n")
+        # A STOP marker requests a checkpoint at this completed optimizer step.
+        # Unlike a process signal this also works with distributed launchers.
+        stop_requested = torch.tensor(int((output / "STOP").exists()), device=device)
+        if world > 1:
+            dist.all_reduce(stop_requested, op=dist.ReduceOp.MAX)
+        stopping = bool(stop_requested.item())
+        if not stopping and val_loader is not None and (step % args.validate_every == 0 or step == args.steps):
             raw_model.eval()
             values = []
+            val_diagnostic_totals = torch.zeros(len(PLAYER_DIAGNOSTIC_KEYS), device=device)
             with torch.no_grad():
                 for number, val in enumerate(val_loader):
                     if number >= args.val_batches:
@@ -1390,6 +1462,7 @@ def main():
                     ):
                         latent = codec.encode(rgb)
                         condition = {k: v.to(device) for k, v in val["conditions"].items()}
+                        val_diagnostics = {} if args.log_player_noise_bins else None
                         val_loss_kwargs = dict(
                             loss_kwargs,
                             counterfactual_group_size=1,
@@ -1415,11 +1488,18 @@ def main():
                             player_identity_slot=val["player_identity_slot"].to(device),
                             player_identity_valid=val["player_identity_valid"].to(device),
                             generator=torch.Generator(device=device).manual_seed(
-                                args.seed + number
+                                # Give each distributed validation shard its
+                                # own stable stream. With eight fixed probes
+                                # and eight ranks this preserves the former
+                                # single-GPU, batch-one seeds for every probe.
+                                args.seed + number * world + rank
                             ),
                             **val_loss_kwargs,
+                            flow_diagnostics=val_diagnostics,
                         )
                         values.append(torch.stack([val_losses[name] for name in LOSS_NAMES]))
+                        if val_diagnostics is not None:
+                            val_diagnostic_totals.add_(pack_player_diagnostics(val_diagnostics, device=device))
             metric = (
                 torch.stack(values).mean(0)
                 if values
@@ -1428,17 +1508,21 @@ def main():
             if world > 1:
                 dist.all_reduce(metric)
                 metric /= world
+                if args.log_player_noise_bins:
+                    dist.all_reduce(val_diagnostic_totals)
             if rank == 0:
                 val_metrics = {
                     name: float(metric[index]) for index, name in enumerate(LOSS_NAMES)
                 }
+                if args.log_player_noise_bins:
+                    val_metrics.update(summarize_player_diagnostics(val_diagnostic_totals))
                 with (output / "validation.jsonl").open("a") as handle:
                     handle.write(json.dumps({"step": step, **val_metrics}) + "\n")
                 if run:
                     run.log({f"val/{name}": value for name, value in val_metrics.items()}, step=step)
             raw_model.train()
         visualize = bool(
-            args.val_window_index
+            not stopping and args.val_window_index
             and args.visualize_every
             and (step % args.visualize_every == 0 or step == args.steps)
         )
@@ -1504,7 +1588,7 @@ def main():
                 raw_model.train()
             if world > 1:
                 dist.barrier()
-        save_now = step % args.save_every == 0 or step == args.steps
+        save_now = stopping or step % args.save_every == 0 or step == args.steps
         if save_now and world > 1:
             dist.barrier()
         checkpoint_error = None
@@ -1548,6 +1632,10 @@ def main():
             checkpoint_error = status[0]
         if checkpoint_error is not None:
             raise RuntimeError(f"checkpoint save failed: {checkpoint_error}")
+        if stopping:
+            if rank == 0:
+                print(f"Stopped by STOP marker after checkpoint at step={step}", flush=True)
+            break
     if world > 1:
         dist.barrier()
     if rank == 0 and run:

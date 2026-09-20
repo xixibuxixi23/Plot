@@ -64,6 +64,7 @@ def renderer_flow_loss(
     model, clean, conditions, *, region_weight=None, generator=None,
     return_clean_prediction=False, counterfactual_group_size=1,
     counterfactual_pure_noise=True, profile_timings=None,
+    player_region_mask=None, diagnostics=None,
 ):
     """Block-causal diffusion-forcing loss with frame zero known.
 
@@ -104,6 +105,11 @@ def renderer_flow_loss(
         lambda: model(noisy, time, c),
     )
     error = (prediction[:, 1:].float() - (noise - clean)[:, 1:].float()).square()
+    if diagnostics is not None:
+        diagnostics["noise_time"] = time[:, 1:].detach().mean()
+        diagnostics["noise_time_per_frame"] = time[:, 1:].detach()
+        if player_region_mask is not None:
+            diagnostics.update(player_flow_diagnostics(error, player_region_mask, time[:, 1:]))
     if region_weight is None:
         loss = error.mean()
     else:
@@ -117,6 +123,30 @@ def renderer_flow_loss(
         # x_0 = x_t - t*v. Pixel supervision decodes only selected frames.
         return loss, noisy - tau * prediction
     return loss
+
+
+def player_flow_diagnostics(error, player_region_mask, time):
+    """Independently normalize player flow per valid sample, excluding prefix.
+
+    Mask area is preserved at latent resolution. Noise-bin sums/counts are
+    additive; an absent bin is not a measured zero loss.
+    """
+    batch, future, channels, height, width = error.shape
+    if player_region_mask.shape[:3] != (batch, future + 1, 1):
+        raise ValueError("player mask must contain the clean prefix and future frames")
+    mask = F.interpolate(player_region_mask[:, 1:].float().flatten(0, 1),
+                         size=(height, width), mode="area").unflatten(0, (batch, future))
+    area = mask.sum((2, 3, 4))
+    weighted = (error.float() * mask).sum((2, 3, 4)) / channels
+    valid = area.sum(1) > 0
+    per_sample = weighted.sum(1) / area.sum(1).clamp_min(1e-8)
+    result = {"player_flow_loss": (per_sample * valid).sum() / valid.sum().clamp_min(1)}
+    per_frame = weighted.detach() / area.clamp_min(1e-8)
+    for name, lo, hi in (("low", 0, 1/3), ("mid", 1/3, 2/3), ("high", 2/3, 1.01)):
+        selected = (time >= lo) & (time < hi) & (area > 0)
+        result[f"player_flow_{name}_sum"] = (per_frame * selected).sum()
+        result[f"player_flow_{name}_count"] = selected.sum()
+    return result
 
 
 def renderer_counterfactual_player_loss(
@@ -177,9 +207,9 @@ def select_renderer_pixel_frames(
     batch, frames = pixel_region_mask.shape[:2]
     if not 1 <= frames_per_sample < frames:
         raise ValueError("frames_per_sample must be within the future-frame count")
-    if selection_mode not in {"mixed", "player"}:
-        raise ValueError("selection_mode must be 'mixed' or 'player'")
-    if selection_mode == "player" and player_region_mask is None:
+    if selection_mode not in {"mixed", "player", "player_unique"}:
+        raise ValueError("selection_mode must be 'mixed', 'player' or 'player_unique'")
+    if selection_mode in {"player", "player_unique"} and player_region_mask is None:
         raise ValueError("player frame selection requires player_region_mask")
 
     coverage = pixel_region_mask[:, 1:].flatten(2).sum(-1).float()
@@ -221,7 +251,20 @@ def select_renderer_pixel_frames(
         ) + 1
         health_frame = torch.where(has_damage[:, None], sampled_minimum, random_frame)
 
-    if selection_mode == "player":
+    if selection_mode == "player_unique":
+        # Sample visible-player frames by area, without replacement. If fewer
+        # than K exist, fill from other unused future frames; their zero player
+        # masks provide no fabricated supervision. The prefix is never drawn.
+        remaining = torch.ones_like(player_coverage)
+        selected = []
+        for _ in range(frames_per_sample):
+            weights = player_coverage * remaining
+            weights = torch.where(weights.sum(1, keepdim=True) > 0, weights, remaining)
+            index = torch.multinomial(weights, 1, generator=generator)
+            selected.append(index + 1)
+            remaining.scatter_(1, index, 0)
+        indices = torch.cat(selected, dim=1)
+    elif selection_mode == "player":
         extras = torch.randint(
             1,
             frames,
@@ -268,6 +311,8 @@ def renderer_pixel_losses(
     damaged_health_upweight=4.0,
     health_box=(190 / 640, 300 / 360, 314 / 640, 322 / 360),
     profile_timings=None,
+    diagnostics=None,
+    noise_time=None,
 ):
     """Full-resolution entity and Minecraft heart-bar losses.
 
@@ -338,6 +383,24 @@ def renderer_pixel_losses(
         selected_player_mask.float(), kernel_size=5, stride=1, padding=2
     )
     player_edge = _masked_edge_l1(decoded, selected_target, player_edge_mask)
+
+    if diagnostics is not None:
+        if noise_time is None or noise_time.shape != (batch, future_frames):
+            raise ValueError("pixel diagnostics require future-frame noise times")
+        # Diagnostics use equal weight per valid decoded frame, not pixel-area
+        # weighting across the batch. Sums/counts can be merged across ranks.
+        area = selected_player_mask.float().flatten(1).sum(1)
+        per_frame = ((decoded.detach().float() - selected_target.float()).abs()
+                     * selected_player_mask.float()).flatten(1).sum(1)
+        per_frame = per_frame / (3 * area.clamp_min(1e-8))
+        selected_time = noise_time[batch_indices, frame_indices - 1].flatten()
+        valid = area > 0
+        diagnostics["player_pixel_valid_count"] = valid.sum()
+        diagnostics["player_pixel_selected_count"] = area.new_tensor(area.numel())
+        for name, lo, hi in (("low", 0, 1/3), ("mid", 1/3, 2/3), ("high", 2/3, 1.01)):
+            included = valid & (selected_time >= lo) & (selected_time < hi)
+            diagnostics[f"player_pixel_{name}_sum"] = (per_frame * included).sum()
+            diagnostics[f"player_pixel_{name}_count"] = included.sum()
 
     height, width = target_rgb.shape[-2:]
     x0, y0, x1, y1 = health_box
@@ -485,6 +548,8 @@ def renderer_training_losses(
     counterfactual_player_difference_weight=0.0,
     counterfactual_pure_noise=True,
     flow_loss_weight=1.0,
+    player_flow_loss_weight=0.0,
+    flow_diagnostics=None,
     generator=None,
     profile_timings=None,
 ):
@@ -496,12 +561,15 @@ def renderer_training_losses(
         "player_pixel_edge": float(player_pixel_edge_weight),
         "health_pixel_l1": float(health_pixel_l1_weight),
     }
-    if min(flow_loss_weight, *weights.values(), player_identity_loss_weight,
+    if min(flow_loss_weight, player_flow_loss_weight, *weights.values(), player_identity_loss_weight,
            counterfactual_player_difference_weight) < 0:
         raise ValueError("flow and pixel loss weights must be nonnegative")
     use_pixels = any(weight > 0 for weight in weights.values())
     use_identity = player_identity_loss_weight > 0
     use_counterfactual = counterfactual_player_difference_weight > 0
+    if player_flow_loss_weight > 0 and player_region_mask is None:
+        raise ValueError("player flow loss requires player_region_mask")
+    diagnostics = flow_diagnostics if flow_diagnostics is not None else {}
     if use_counterfactual and player_region_mask is None:
         raise ValueError("counterfactual appearance loss requires player_region_mask")
     if use_identity and identity_encoder is None:
@@ -516,6 +584,8 @@ def renderer_training_losses(
         counterfactual_group_size=counterfactual_group_size,
         counterfactual_pure_noise=counterfactual_pure_noise,
         profile_timings=profile_timings,
+        player_region_mask=player_region_mask,
+        diagnostics=diagnostics if player_flow_loss_weight > 0 or flow_diagnostics is not None else None,
     )
     if use_pixels or use_identity or use_counterfactual:
         flow_loss, clean_prediction = result
@@ -536,6 +606,8 @@ def renderer_training_losses(
             target_agent=conditions.get("target_agent"),
             damaged_health_upweight=damaged_health_upweight,
             profile_timings=profile_timings,
+            diagnostics=flow_diagnostics,
+            noise_time=diagnostics.get("noise_time_per_frame"),
         )
     else:
         pixels = {name: flow_loss.new_zeros(()) for name in weights}
@@ -579,9 +651,11 @@ def renderer_training_losses(
     auxiliary = sum(weights[name] * value for name, value in pixels.items())
     auxiliary = auxiliary + player_identity_loss_weight * identity["player_identity_loss"]
     auxiliary = auxiliary + counterfactual_player_difference_weight * counterfactual
+    player_flow = diagnostics.get("player_flow_loss", flow_loss.new_zeros(()))
     return {
-        "total_loss": float(flow_loss_weight) * flow_loss + auxiliary,
+        "total_loss": float(flow_loss_weight) * flow_loss + player_flow_loss_weight * player_flow + auxiliary,
         "flow_loss": flow_loss,
+        "player_flow_loss": player_flow,
         "auxiliary_loss": auxiliary,
         **pixels,
         **identity,

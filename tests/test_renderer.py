@@ -806,7 +806,9 @@ def test_continuous_dataset_preserves_state_time_and_splits(tmp_path, monkeypatc
              wielded_item_id=np.tile([0,1],(t-1,1)),
              player_health=health, player_health_valid=np.ones((t,a),bool),
              termination_flag=np.zeros((t-1,a),bool), entity_id=np.array(['agent0','agent1']),
-             entity_kind=np.array(['player','player']),
+             # NPC residents also have explicit four-view appearance and must
+             # therefore be included in player_region_mask supervision.
+             entity_kind=np.array(['player','npc']),
              entity_render_object_id=np.tile([10,11],(t,1)).astype(np.uint16),
              entity_weapon_name=np.tile(['','sword'],(t,1)), entity_valid=np.ones((t,a),bool),
              instance_mask=np.stack((
