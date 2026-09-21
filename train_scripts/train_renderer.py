@@ -518,6 +518,15 @@ def main():
         default=2,
         help="Entity-rich and HP-informative future frames decoded per target view",
     )
+    parser.add_argument(
+        "--pixel-frame-selection",
+        choices=("mixed", "player", "player_unique"),
+        default="mixed",
+        help=(
+            "Select decoded frames using the legacy mixed rule, a visible-player "
+            "draw, or distinct visible-player frames with empty-mask fallback"
+        ),
+    )
     parser.add_argument("--entity-pixel-l1-weight", type=float, default=0.5)
     parser.add_argument("--entity-pixel-edge-weight", type=float, default=0.2)
     parser.add_argument("--player-pixel-l1-weight", type=float, default=0.0)
@@ -1153,6 +1162,7 @@ def main():
     train_total_loss_ema_decay = 0.99
     loss_kwargs = {
         "frames_per_sample": args.pixel_loss_frames,
+        "pixel_frame_selection": args.pixel_frame_selection,
         "entity_pixel_l1_weight": auxiliary_weights["entity_pixel_l1_weight"],
         "entity_pixel_edge_weight": auxiliary_weights["entity_pixel_edge_weight"],
         "player_pixel_l1_weight": auxiliary_weights["player_pixel_l1_weight"],

@@ -165,17 +165,22 @@ def select_renderer_pixel_frames(
     *,
     frames_per_sample,
     player_region_mask=None,
+    selection_mode="mixed",
     hp=None,
     target_agent=None,
     generator=None,
     full_health=20.0,
 ):
-    """Select an entity-rich frame and, when possible, a damaged-HP frame."""
+    """Select future frames for sparse decoded-pixel supervision."""
     if pixel_region_mask.ndim != 5 or pixel_region_mask.shape[2] != 1:
         raise ValueError("pixel_region_mask must be [B,T,1,H,W]")
     batch, frames = pixel_region_mask.shape[:2]
     if not 1 <= frames_per_sample < frames:
         raise ValueError("frames_per_sample must be within the future-frame count")
+    if selection_mode not in {"mixed", "player", "player_unique"}:
+        raise ValueError("selection_mode must be 'mixed', 'player' or 'player_unique'")
+    if selection_mode in {"player", "player_unique"} and player_region_mask is None:
+        raise ValueError("player frame selection requires player_region_mask")
 
     coverage = pixel_region_mask[:, 1:].flatten(2).sum(-1).float()
     entity_frame = torch.multinomial(
@@ -216,7 +221,29 @@ def select_renderer_pixel_frames(
         ) + 1
         health_frame = torch.where(has_damage[:, None], sampled_minimum, random_frame)
 
-    if frames_per_sample == 1:
+    if selection_mode == "player_unique":
+        # Prefer distinct future frames with visible player pixels. If a clip
+        # has fewer than K such frames, fill from unused future frames; their
+        # empty masks contribute zero player loss rather than fake supervision.
+        remaining = torch.ones_like(player_coverage)
+        selected = []
+        for _ in range(frames_per_sample):
+            weights = player_coverage * remaining
+            weights = torch.where(weights.sum(1, keepdim=True) > 0, weights, remaining)
+            index = torch.multinomial(weights, 1, generator=generator)
+            selected.append(index + 1)
+            remaining.scatter_(1, index, 0)
+        indices = torch.cat(selected, dim=1)
+    elif selection_mode == "player":
+        extras = torch.randint(
+            1,
+            frames,
+            (batch, frames_per_sample - 1),
+            device=pixel_region_mask.device,
+            generator=generator,
+        )
+        indices = torch.cat((player_frame, extras), dim=1)
+    elif frames_per_sample == 1:
         indices = torch.where(has_damage[:, None], health_frame, entity_frame)
     elif frames_per_sample >= 3 and player_region_mask is not None:
         extras = torch.randint(
@@ -247,6 +274,7 @@ def renderer_pixel_losses(
     *,
     player_region_mask=None,
     frames_per_sample=1,
+    frame_selection="mixed",
     generator=None,
     hp=None,
     target_agent=None,
@@ -284,6 +312,7 @@ def renderer_pixel_losses(
         pixel_region_mask,
         frames_per_sample=frames_per_sample,
         player_region_mask=player_region_mask,
+        selection_mode=frame_selection,
         hp=hp,
         target_agent=target_agent,
         generator=generator,
@@ -450,6 +479,7 @@ def renderer_training_losses(
     player_region_mask=None,
     region_weight=None,
     frames_per_sample=2,
+    pixel_frame_selection="mixed",
     entity_pixel_l1_weight=0.5,
     entity_pixel_edge_weight=0.2,
     player_pixel_l1_weight=0.0,
@@ -512,6 +542,7 @@ def renderer_training_losses(
             pixel_region_mask,
             player_region_mask=player_region_mask,
             frames_per_sample=frames_per_sample,
+            frame_selection=pixel_frame_selection,
             generator=generator,
             hp=conditions.get("hp"),
             target_agent=conditions.get("target_agent"),
