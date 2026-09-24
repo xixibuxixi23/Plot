@@ -13,6 +13,8 @@ from .fill_dataset import TextAgentFillDataset, _read_video_frames
 
 
 VOXEL_COUNT = 13**3
+EVENT_CONTEXT_FRAMES = 4
+PAYLOAD_CONFIRMATION_STATES = 8
 BLOCK_EVENTS = {'block_placed','block_dug','scaffold_placed','scaffold_dug'}
 TYPES = {'human_like':0,'npc_villager':1,'npc_zombie':2,'npc_skeleton':3}
 
@@ -40,6 +42,35 @@ def aligned_events(events, actions):
             raise ValueError('effective event has missing/inconsistent transition alignment')
         result[int(t)].append(e)
     return result
+
+
+def _confirmed_block_payload(events_by_step, event_step, event, xyz, raw, centers, stats):
+    """Return the first committed block state before another edit at this voxel."""
+    placing=event['event'] in {'block_placed','scaffold_placed'}
+    next_edit=min((step for step,records in events_by_step.items() if step>event_step
+                   and any((position:=event_position(record)) is not None
+                           and np.array_equal(position,xyz) for record in records)),
+                  default=len(raw))
+    final_state=min(len(raw)-1,event_step+PAYLOAD_CONFIRMATION_STATES,next_edit)
+    for state in range(event_step+1,final_state+1):
+        observed=set()
+        for resident in range(centers.shape[1]):
+            source_local=xyz-(centers[state,resident]-24)
+            if np.all(source_local>=0) and np.all(source_local<49):
+                observed.add(int(raw[(state,resident,*source_local,0)]))
+        compatible={raw_id for raw_id in observed
+                    if (placing and raw_id!=126) or (not placing and raw_id==126)}
+        if len(compatible)==1:
+            delay=state-(event_step+1)
+            if delay:
+                stats['payload_confirmed_after_delay']+=1
+                stats['payload_confirmation_delay_steps']+=delay
+            return next(iter(compatible))
+        if len(compatible)>1:
+            stats['conflicting_payload_observations']+=1
+        elif observed:
+            stats['stale_payload_observations']+=1
+    return None
 
 
 def build_write_labels(events_by_step, start, agents, anchors, health, raw, centers, vocabulary, strict_block_payload=False):
@@ -93,22 +124,11 @@ def build_write_labels(events_by_step, start, agents, anchors, health, raw, cent
                 address[k,slot]=np.ravel_multi_index(tuple(local),(13,13,13))
                 if by_voxel[tuple(xyz)]!=1:
                     stats['ambiguous_block_payloads']+=1;continue
-                candidates=set()
-                for resident in range(a):
-                    source_local=xyz-(centers[start+k+1,resident]-24)
-                    if np.all(source_local>=0) and np.all(source_local<49):
-                        raw_id=int(raw[(start+k+1,resident,*source_local,0)])
-                        if strict_block_payload:
-                            placing=e['event'] in {'block_placed','scaffold_placed'}
-                            if (placing and raw_id==126) or (not placing and raw_id!=126):
-                                stats['stale_payload_observations']+=1
-                                continue
-                        candidates.add(raw_id)
-                        if not strict_block_payload:break
-                if len(candidates)==1:
-                    encoded,known=vocabulary.encode(np.asarray(next(iter(candidates))))
+                raw_id=_confirmed_block_payload(
+                    events_by_step,start+k,e,xyz,raw,centers,stats)
+                if raw_id is not None:
+                    encoded,known=vocabulary.encode(np.asarray(raw_id))
                     block[k,slot]=int(encoded);block_valid[k,slot]=bool(known)
-                elif candidates:stats['conflicting_payload_observations']+=1
                 else:stats['event_observation_payload_mismatch']+=1
                 if not block_valid[k,slot]:stats['unknown_block_payloads']+=1
     stats['queries']=8*a;stats['null_labels']=int(((address==null)&valid).sum())
@@ -171,6 +191,10 @@ def episode_windows(path, vocabulary, items, *, windows_per_episode=8, attack_on
                       ([] if attack_only else spread(negatives,limit-max(1,limit//2)))))
     if windows_per_episode is None:
         starts=[s for s,_ in eligible if (s-first)%stride==0]
+        # A strided stream must still cover the last valid transitions.  Without
+        # this terminal window, up to stride-1 real events silently disappear.
+        if eligible and eligible[-1][0] not in starts:
+            starts.append(eligible[-1][0])
     metadata=json.loads((path/'training_metadata.json').read_text())
     raw_items={int(v):k for k,v in metadata['item_vocabulary'].items()}
     rows=[list(data['entity_id'].astype(str)).index(x) for x in agents]
@@ -213,6 +237,24 @@ def episode_windows(path, vocabulary, items, *, windows_per_episode=8, attack_on
                     'active':data['active_agent_mask'][start].astype(bool),
                     'previous_rgb':np.stack([rgb[i][start] for i in range(a)]),
                     'hotbar':mapped,'selected_slot':data['selected_slot'][start].astype(np.int64)}
+        context_indices=np.arange(start-EVENT_CONTEXT_FRAMES,start)
+        context_valid=context_indices>=0
+        context_indices=np.clip(context_indices,0,n-1)
+        conditions.update(
+            event_context_actions=action[context_indices].astype(np.float32),
+            event_context_pose=pose[context_indices].astype(np.float32),
+            event_context_hp=health[context_indices].astype(np.float32),
+            event_context_held_item=held[context_indices],
+            event_context_camera_relative=(data['cam_pos'][context_indices]
+                                           -pose[context_indices,:,:3]).astype(np.float32),
+            event_context_camera_direction=data['cam_dir'][context_indices].astype(np.float32),
+            event_context_valid=(context_valid[:,None]
+                                 &data['active_agent_mask'][context_indices].astype(bool)))
+        if not context_valid.all():
+            for key in ('event_context_actions','event_context_pose','event_context_hp',
+                        'event_context_held_item','event_context_camera_relative',
+                        'event_context_camera_direction'):
+                conditions[key][~context_valid]=0
         labels.update(pose=pose[start+1:start+9],hp=health[start+1:start+9].astype(np.float32),
                       camera_relative=(data['cam_pos'][start+1:start+9]-pose[start+1:start+9,:,:3]).astype(np.float32),
                       camera_direction=data['cam_dir'][start+1:start+9].astype(np.float32),
@@ -249,7 +291,8 @@ def collate_transition(samples):
             for s in samples:
                 x=s[group][key].clone(); old=s['inputs']['active'].numel()
                 if group=='targets' and key=='address':x[x==VOXEL_COUNT+old]=VOXEL_COUNT+a
-                axis=1 if group=='targets' or key=='actions' else 0
+                axis=1 if (group=='targets' or key=='actions'
+                           or key.startswith('event_context_')) else 0
                 if old<a:
                     shape=list(x.shape);shape[axis]=a-old
                     padding=x.new_zeros(shape)

@@ -69,7 +69,7 @@ M1 默认只能填 `known=False` 的位置，M2 的显式写事件才允许覆�
 
 [`plot/transition_state.py`](plot/transition_state.py) 定义：
 
-- `CharRow`：位置、yaw/pitch、HP、手持物、居民类型和相机相对状态；
+- `CharRow`：位置、每步世界坐标速度、yaw/pitch、HP、手持物、居民类型和相机相对状态；
 - `WriteEvent`：transition、顺序、source、target kind、target 和 payload。
 
 体素写的 payload 是新 block id；居民写的 payload 是 HP 变化。无效攻击、普通移动和没有
@@ -96,7 +96,6 @@ Plot/
 ├── plot/training/      loss、训练 step、rollout 和监控逻辑
 ├── plot/pipelines/     世界记忆、提交、渲染和闭环编排
 ├── train_scripts/      可执行训练入口与正式/实验 recipe
-├── experiments/m1/    当前 M1 flow 基线及受控替代实验
 ├── dataset_toolkits/   可重建索引和训练缓存生成器
 ├── scripts/            下载、校验、环境检查和运维工具
 ├── derived/            可迁移词表和小型索引，不是原始数据
@@ -119,9 +118,9 @@ optimizer 和分布式运行。
 `PlotPipeline.fill_resident_windows` 让多个居民窗口从同一个已提交快照提出候选；重叠坐标按
 置信度选一个结果，再一次性写入共享记忆，避免某个居民先写导致后续居民读取到不同输入。
 
-仓库还保留 `experiments/m1/` 下的 multiview/PERSIST flow 主基线，以及 geometry bootstrap、
-projective fill 等替代路径。它们用于当前 M1 效果研究，不能与 `FillNetwork` 脚本混称为同一个
-checkpoint 架构。审阅实验结果时必须同时记录具体入口、配置和 checkpoint。
+M1 只保留一套 `FillNetwork` 和一个 checkpoint 架构。初始化模式使用图片并填充完整未知窗口；
+边界续写模式输入已有体素，可选择使用图片，只监督新暴露的未知区域。无图片样本使用学习到的
+null-image token，因此部署时不需要切换网络。
 
 ## 6. M2：运动和 target-addressed write
 

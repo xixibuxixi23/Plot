@@ -17,8 +17,11 @@ class TransitionArgs:
     heads: int = 8
     event_queries: int = 4
     event_decoder_layers: int = 2
+    event_context_frames: int = 0
     player_branch: bool = False
     player_depth: int = 3
+    player_velocity: bool = False
+    player_voxel: bool = False
     attack_branch: bool = False
     attack_queries: int = 2
     attack_decoder_layers: int = 2
@@ -108,9 +111,8 @@ class TransitionNetwork(nn.Module):
         self.edit_kind_head = nn.Linear(d,3)
         self.edit_age_head = nn.Linear(d,1)
         self.edit_progress_head = nn.Linear(d,1)
-        # Window-level ordered events.  Event existence is represented by one
-        # count per resident; each active slot chooses exactly one of the eight
-        # transition times, which prevents a single slot firing on two frames.
+        # Window-level ordered events use a single categorical count followed by
+        # ordered slots. This is the production architecture.
         event_layer = nn.TransformerDecoderLayer(
             d_model=d,nhead=cfg.heads,dim_feedforward=4*d,dropout=.1,
             activation='gelu',batch_first=True,norm_first=True)
@@ -123,6 +125,10 @@ class TransitionNetwork(nn.Module):
         self.event_time_head = nn.Linear(d,8)
         self.event_operation_head = nn.Linear(d,2)
         self.event_pointer_query = nn.Linear(d,d)
+        if cfg.event_context_frames:
+            self.event_context_time_embedding=nn.Parameter(
+                torch.randn(cfg.event_context_frames,d)*.02)
+            self.event_context_norm=nn.LayerNorm(d)
         if cfg.player_branch:
             self.player_item_embedding=nn.Embedding(cfg.num_items,32)
             self.player_type_embedding=nn.Embedding(4,16)
@@ -130,6 +136,19 @@ class TransitionNetwork(nn.Module):
             self.player_action=nn.Linear(23,d)
             self.player_proposal=nn.Linear(7,d)
             self.player_held_condition=nn.Linear(32,d)
+            if cfg.player_velocity:
+                self.player_velocity=nn.Linear(3,d)
+                nn.init.zeros_(self.player_velocity.weight)
+                nn.init.zeros_(self.player_velocity.bias)
+            if cfg.player_voxel:
+                self.player_voxel_norm=nn.ModuleList([nn.LayerNorm(d) for _ in range(cfg.player_depth)])
+                self.player_voxel_attn=nn.ModuleList([
+                    nn.MultiheadAttention(d,cfg.heads,batch_first=True)
+                    for _ in range(cfg.player_depth)])
+                self.player_voxel_null=nn.Parameter(torch.randn(d)*.02)
+                for attention in self.player_voxel_attn:
+                    nn.init.zeros_(attention.out_proj.weight)
+                    nn.init.zeros_(attention.out_proj.bias)
             self.player_time_embedding=nn.Parameter(torch.randn(8,d)*.02)
             self.player_blocks=nn.ModuleList([PlayerBlock(d,cfg.heads) for _ in range(cfg.player_depth)])
         if cfg.attack_branch:
@@ -201,12 +220,43 @@ class TransitionNetwork(nn.Module):
         residual = self.pose_head(player_q)
         predicted = torch.cat((pose[:,None,:,:3]+proposal[...,:3]+residual[...,:3],
                                 wrap_angle(proposal[...,3:]+residual[...,3:])), -1)
+        velocity = torch.cat((predicted[:, :1, :, :3] - pose[:, None, :, :3],
+                              predicted[:, 1:, :, :3] - predicted[:, :-1, :, :3]), 1)
         camera = self.camera_head(player_q)
         direction = nn.functional.normalize(inputs['camera_direction'][:,None]+camera[...,3:],dim=-1)
         event_memory=q.transpose(1,2).reshape(b*a,8,d)
+        event_memory_valid=torch.ones(b*a,8,dtype=torch.bool,device=q.device)
+        if self.cfg.event_context_frames:
+            frames=self.cfg.event_context_frames
+            context_pose=inputs['event_context_pose']
+            if context_pose.shape[1]!=frames:
+                raise ValueError('event context length does not match model configuration')
+            context_held=inputs['event_context_held_item'].long()
+            context_state=torch.cat((
+                inputs['event_context_hp'][...,None]/20.,
+                context_pose[...,3:].sin(),context_pose[...,3:].cos(),
+                self.item_embedding(context_held),
+                self.type_embedding(inputs['resident_type'])[:,None].expand(-1,frames,-1,-1),
+                inputs['event_context_camera_relative'],
+                inputs['event_context_camera_direction']),-1)
+            context_valid=(inputs['event_context_valid'].bool()
+                           &active[:,None])
+            context=(self.action(inputs['event_context_actions'])
+                     +self.state(context_state)
+                     +self.held_condition(self.item_embedding(context_held))
+                     +self.event_context_time_embedding[None,:,None])
+            context=self.event_context_norm(context)*context_valid[...,None]
+            context=context.transpose(1,2).reshape(b*a,frames,d)
+            context_valid=context_valid.transpose(1,2).reshape(b*a,frames)
+            event_memory=torch.cat((context,event_memory),1)
+            event_memory_valid=torch.cat((context_valid,event_memory_valid),1)
         event_query=self.event_query.weight[None].expand(b*a,-1,-1)
-        event=self.event_decoder(event_query,event_memory).reshape(b,a,self.cfg.event_queries,d)
-        event_summary=event_memory.reshape(b,a,8,d).mean(2)
+        event=self.event_decoder(
+            event_query,event_memory,memory_key_padding_mask=~event_memory_valid
+        ).reshape(b,a,self.cfg.event_queries,d)
+        summary=(event_memory*event_memory_valid[...,None]).sum(1)
+        summary=summary/event_memory_valid.sum(1,keepdim=True).clamp_min(1)
+        event_summary=summary.reshape(b,a,d)
         event_count=self.event_count_head(torch.cat((event_summary,event.mean(2)),-1))
         event_candidates=candidates[:,:,:-1]
         event_valid=candidate_valid[:,:,:-1]
@@ -215,7 +265,7 @@ class TransitionNetwork(nn.Module):
         )/d**.5
         event_address=event_address.masked_fill(~event_valid[:,:,None],-torch.inf)
         player=(self.forward_player(inputs) if self.cfg.player_branch else {
-            'held_logits':self.held_head(player_q),'pose':predicted,
+            'held_logits':self.held_head(player_q),'pose':predicted,'velocity':velocity,
             'proposal':proposal,'pose_residual':residual,
             'camera_relative':inputs['camera_relative'][:,None]+camera[...,:3],
             'camera_direction':direction,'player_hidden':player_q})
@@ -223,7 +273,8 @@ class TransitionNetwork(nn.Module):
                 'edit_kind_logits':self.edit_kind_head(q),
                 'edit_age':self.edit_age_head(q).squeeze(-1),
                 'edit_progress':self.edit_progress_head(q).squeeze(-1).sigmoid(),
-                'event_hidden':event,'event_count_logits':event_count,
+                'event_hidden':event,
+                'event_count_logits':event_count,
                 'event_time_logits':self.event_time_head(event),
                 'event_operation_logits':self.event_operation_head(event),
                 'event_address_logits':event_address,'address_logits':logits,
@@ -245,12 +296,49 @@ class TransitionNetwork(nn.Module):
         held=torch.where(held_valid,held,inputs['held_item'][:,None])
         q=(self.player_action(inputs['actions'])+self.player_proposal(proposal_features)+state[:,None]
            +self.player_held_condition(embedding(held))+self.player_time_embedding[None,:,None])
-        for block in self.player_blocks:q=block(q,active)
+        if self.cfg.player_velocity:
+            velocity=inputs.get('initial_velocity')
+            if velocity is None:
+                velocity=torch.zeros_like(pose[...,:3])
+            velocity=velocity/self.cfg.kinematics.distance_per_step
+            q=q+self.player_velocity(velocity)[:,None]
+        geometry=geometry_padding=None
+        if self.cfg.player_voxel:
+            if 'player_voxels' in inputs:
+                player_voxels=inputs['player_voxels']
+                player_known=inputs['player_voxel_known']
+                player_xyz=inputs['player_voxel_relative_xyz']
+            else:
+                center=slice(3,10)
+                player_voxels=inputs['voxels'][:,:,center,center,center]
+                player_known=inputs['voxel_known'][:,:,center,center,center]
+                player_xyz=(inputs['voxel_relative_xyz'].reshape(b,a,13,13,13,3)
+                            [:,:,center,center,center].reshape(b,a,7**3,3))
+            ids=torch.where(player_known.bool(),player_voxels.long(),
+                            self.cfg.num_block_classes)
+            side=ids.shape[-1]
+            geometry=self.block_embedding(ids).reshape(b*a,side,side,side,self.cfg.width).permute(0,4,1,2,3)
+            geometry=(geometry+self.voxel_cnn(geometry)).flatten(2).transpose(1,2)
+            xyz=player_xyz.reshape(b*a,side**3,3)
+            geometry=geometry+self.coordinate(xyz/6.)
+            geometry=torch.cat((geometry,self.player_voxel_null[None,None].expand(b*a,1,-1)),1)
+            known=player_known.reshape(b*a,side**3).bool()
+            geometry_padding=torch.cat((~known,torch.zeros(b*a,1,dtype=torch.bool,device=known.device)),1)
+        for index,block in enumerate(self.player_blocks):
+            q=block(q,active)
+            if geometry is not None:
+                query=self.player_voxel_norm[index](q).transpose(1,2).reshape(b*a,8,self.cfg.width)
+                update=self.player_voxel_attn[index](query,geometry,geometry,
+                                                     key_padding_mask=geometry_padding,
+                                                     need_weights=False)[0]
+                q=q+update.reshape(b,a,8,self.cfg.width).transpose(1,2)
         residual=self.pose_head(q);camera=self.camera_head(q)
         predicted=torch.cat((pose[:,None,:,:3]+proposal[...,:3]+residual[...,:3],
                              wrap_angle(proposal[...,3:]+residual[...,3:])), -1)
+        velocity=torch.cat((predicted[:,:1,:,:3]-pose[:,None,:,:3],
+                            predicted[:,1:,:,:3]-predicted[:,:-1,:,:3]),1)
         direction=nn.functional.normalize(inputs['camera_direction'][:,None]+camera[...,3:],dim=-1)
-        output={'held_logits':self.held_head(q),'pose':predicted,'proposal':proposal,
+        output={'held_logits':self.held_head(q),'pose':predicted,'velocity':velocity,'proposal':proposal,
                 'pose_residual':residual,'camera_relative':inputs['camera_relative'][:,None]+camera[...,:3],
                 'camera_direction':direction,'player_hidden':q}
         if self.cfg.attack_branch:

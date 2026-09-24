@@ -60,7 +60,8 @@ class FillTrainer:
     def _losses(self, batch):
         output = self.model(
             batch["voxel_context"], batch["known_mask"], batch["fill_mask"],
-            batch["images"], batch["agent_mask"], return_aux=True,
+            batch["images"], batch["agent_mask"], batch.get("image_condition_mask"),
+            return_aux=True,
         )
         voxel = masked_fill_loss(
             output["voxel_logits"], batch["target"], batch["fill_mask"],
@@ -68,7 +69,13 @@ class FillTrainer:
         )
         position, direction = camera_pose_loss(
             output["camera_position"], output["camera_direction"],
-            batch["camera_position"], batch["camera_direction"], batch["camera_valid"],
+            batch["camera_position"], batch["camera_direction"],
+            batch["camera_valid"]
+            & batch["agent_mask"].bool()
+            & batch.get(
+                "image_condition_mask",
+                torch.ones(len(batch["camera_valid"]), device=batch["camera_valid"].device, dtype=torch.bool),
+            )[:, None],
         )
         zero = voxel.new_zeros(())
         silhouette, depth = zero, zero
@@ -179,3 +186,12 @@ class FillTrainer:
         self.optimizer.load_state_dict(checkpoint["optimizer"])
         self.step = int(checkpoint.get("step", 0))
         return checkpoint
+
+    def initialize_model(self, path: str | Path):
+        """Warm-start model weights while resetting optimizer and step."""
+        checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+        missing, unexpected = self.raw_model.load_state_dict(checkpoint["model"], strict=False)
+        allowed_missing = {"null_image_token"}
+        if set(missing) - allowed_missing or unexpected:
+            raise ValueError(f"Incompatible initialization: missing={missing}, unexpected={unexpected}")
+        return {"source_step": int(checkpoint.get("step", 0)), "missing": list(missing)}

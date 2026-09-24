@@ -38,6 +38,9 @@ class CharRow:
     resident_type: int
     camera_relative: tuple[float,float,float]
     camera_direction: tuple[float,float,float]
+    # Per-transition displacement in world XYZ.  Kept in the authoritative
+    # resident row so M2 rollouts do not need to reconstruct motion history.
+    velocity_xyz: tuple[float,float,float] = (0., 0., 0.)
 
 
 @dataclass(frozen=True)

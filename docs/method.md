@@ -36,10 +36,12 @@ WorldMemory
 `CharRow` 只保存推理确实需要且不能从其他字段推出的状态：
 
 ```text
-position_xyz, yaw, pitch, hp, held_item, appearance_id/type
+position_xyz, velocity_xyz, yaw, pitch, hp, held_item, appearance_id/type
 ```
 
 - 居民始终位于地面运动，本轮不单独预测飞行状态。
+- `velocity_xyz` 保存最近一次 transition 的世界坐标位移；M2 在块边界直接读取，
+  并随每帧状态提交显式更新，不由下游模块临时回看位置历史重算。
 - `hp > 0` 已经表达存活，不再重复保存或预测 `alive`。
 - `active_agent_mask` 只表示槽位是否存在/是否为 padding，不表示存活。
 - 不保存 attack cooldown、last-attack time 或 knockback 状态作为模型输入。
@@ -124,6 +126,10 @@ held_item           : 已包含在居民状态中
 - 8 步 query 之间使用双向注意力，因为未来 8 步动作在调用 M2 时都已知。
 - M2 不使用 KV cache。
 - 位置和朝向先由按键产生一个粗略运动学 proposal，主干只预测 residual。
+- Player dynamics 分支额外读取每个居民自己的 `7³` 紧凑局部体素，并在每层通过
+  cross-attention 注入；长 rollout 中体素世界坐标必须相对预测位置重新对齐。
+- 几何分支从零影响初始化并独立微调，已收敛的速度/运动主干保持冻结，避免短期几何
+  拟合破坏长程动力学。
 - proposal 只包含运动学，不手写碰撞、攻击、击退或 cooldown 规则。
 - 每个 query 输出连续 self-update residual、统一地址 pointer 和按目标类型选择的 payload。
 - 地址候选固定为 13³ 体素、可见/邻近居民以及 null；事件坐标随后映射回全局记忆。

@@ -15,7 +15,7 @@ def evaluate(model,loader,device,max_batches=4,objective="full",null_weight=.1,
              occurrence_pos_weight=10.,occurrence_threshold=.5):
     model.eval();metrics=[];example=None;best_score=-1
     for index,batch in enumerate(loader):
-        if index>=max_batches:break
+        if max_batches is not None and max_batches>0 and index>=max_batches:break
         values=move(batch,device);out=model(values['inputs'])
         _,m=transition_loss(model,out,**values,objective=objective,null_weight=null_weight,
                            occurrence_pos_weight=occurrence_pos_weight,
@@ -27,7 +27,9 @@ def evaluate(model,loader,device,max_batches=4,objective="full",null_weight=.1,
     count_keys=('event_labels','valid_queries','correct_addresses','predicted_events','correct_events',
                 'block_labels','correct_block_payloads','correct_edits','detected_events','localized_events',
                 'false_events_without_edit_input','tolerant_correct_edits','tolerant_predicted_events',
-                'tolerant_block_labels')
+                'tolerant_block_labels','tolerant2_localized_edits','tolerant2_correct_edits',
+                'coordinate_localized_edits','coordinate_correct_edits','false_coordinate_writes',
+                'false_complete_writes')
     for k in count_keys:
         if k in metrics[0]:result[k]=sum(row[k] for row in metrics)
     result['event_recall']=result['correct_events']/max(1,result['event_labels'])
@@ -39,6 +41,16 @@ def evaluate(model,loader,device,max_batches=4,objective="full",null_weight=.1,
     result['occurrence_precision']=result['detected_events']/max(1,result['predicted_events'])
     result['localization_given_event']=result['localized_events']/max(1,result['event_labels'])
     result['edit_precision_lower_bound']=result['correct_edits']/max(1,result['predicted_events'])
+    if 'tolerant2_correct_edits' in result:
+        predicted=result['tolerant_predicted_events'];labels=result['tolerant_block_labels']
+        result['edit_precision_tolerance2']=result['tolerant2_correct_edits']/max(1,predicted)
+        result['edit_recall_tolerance2']=result['tolerant2_correct_edits']/max(1,labels)
+        result['coordinate_precision']=result['coordinate_localized_edits']/max(1,predicted)
+        result['coordinate_recall']=result['coordinate_localized_edits']/max(1,labels)
+        result['coordinate_payload_precision']=result['coordinate_correct_edits']/max(1,predicted)
+        result['coordinate_payload_recall']=result['coordinate_correct_edits']/max(1,labels)
+        result['payload_correct_given_coordinate']=(
+            result['coordinate_correct_edits']/max(1,result['coordinate_localized_edits']))
     p,r=result['edit_precision_lower_bound'],result['edit_recall']
     result['edit_f1_lower_bound']=2*p*r/max(1e-12,p+r)
     return result,example

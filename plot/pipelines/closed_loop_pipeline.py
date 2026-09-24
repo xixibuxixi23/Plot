@@ -30,7 +30,7 @@ def decode_transition(model, inputs, occurrence_threshold=0.5):
     )
     block, damage = model.payloads(output, address)
     return {
-        "pose": output["pose"], "address": address,
+        "pose": output["pose"], "velocity": output["velocity"], "address": address,
         "block_payload": block.argmax(-1), "hp_payload": damage,
         "held_item": output["held_logits"].argmax(-1),
         "camera_relative": output["camera_relative"],
@@ -185,6 +185,11 @@ class ClosedLoopPipeline:
         actions = self.plan_actions(policy_state, external_actions, controlled)
         inputs = {key: value.to(self.device) if torch.is_tensor(value) else value
                   for key, value in transition_inputs.items()}
+        # The committed CharRow table is authoritative at block boundaries.
+        # Never accept a separately reconstructed or stale caller velocity.
+        inputs["initial_velocity"] = torch.as_tensor(
+            [[self.committer.chars[name].velocity_xyz for name in self.resident_ids]],
+            dtype=torch.float32, device=self.device)
         inputs["actions"] = actions.transpose(0, 1)[None]
         decoded = decode_transition(self.transition, inputs)
         decoded = {key: _numpy(value[0]) for key, value in decoded.items()}

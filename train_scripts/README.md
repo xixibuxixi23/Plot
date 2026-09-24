@@ -2,7 +2,7 @@
 
 | Model | Canonical entry point |
 |---|---|
-| M1 Fill | `train_fill.py`, `train_geometry_bootstrap.py`, `train_geometry_fill.py` |
+| M1 Unified Fill | `train_fill.py` |
 | M2 Transition/Write | `train_transition_full.py` |
 | M3 Renderer | `train_renderer.py` |
 | M4 Inhabitant Policy | `train_policy.py` |

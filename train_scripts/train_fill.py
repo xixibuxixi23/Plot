@@ -23,12 +23,28 @@ from plot.training import FillTrainer, FillTrainerConfig
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train two-view PLOT M1 initialization")
+    parser = argparse.ArgumentParser(description="Train unified optional-image PLOT M1 completion")
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument("--vocabulary", type=Path, required=True)
+    parser.add_argument(
+        "--episode-index",
+        type=Path,
+        help="Optional prebuilt episode index; avoids recursively scanning large releases",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--train-split", default="train")
     parser.add_argument("--val-split", default="val_id")
+    parser.add_argument(
+        "--samples-per-agent",
+        type=int,
+        default=1,
+        help="1 trains initial all-unknown fill; values >1 also sample known-to-unknown discovery states",
+    )
+    parser.add_argument(
+        "--frontier-sampling",
+        action="store_true",
+        help="Choose discovery samples at states that expose previously unseen voxel fringes",
+    )
     parser.add_argument("--batch-size", type=int, default=8, help="Per-GPU batch")
     parser.add_argument("--gradient-accumulation", type=int, default=1)
     parser.add_argument("--num-workers", type=int, default=4)
@@ -54,6 +70,14 @@ def parse_args():
     parser.add_argument("--num-views", type=int, default=2)
     parser.add_argument("--precision", choices=("bf16", "fp16", "fp32"), default="bf16")
     parser.add_argument("--resume", type=Path)
+    parser.add_argument(
+        "--initialize", type=Path,
+        help="Warm-start model weights only; optimizer and step restart from zero",
+    )
+    parser.add_argument(
+        "--frontier-image-probability", type=float, default=1.0,
+        help="Fraction of non-initial frontier slots that retain RGB conditioning",
+    )
     parser.add_argument("--seed", type=int, default=20260908)
     parser.add_argument("--wandb-project", default="plot")
     parser.add_argument("--wandb-name")
@@ -95,6 +119,8 @@ def next_batch(iterator, loader, sampler, epoch):
 
 def main():
     args = parse_args()
+    if args.resume and args.initialize:
+        raise ValueError("--resume and --initialize are mutually exclusive")
     world_size, local_rank, rank = setup_distributed()
     distributed = world_size > 1
     device = f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu"
@@ -104,13 +130,19 @@ def main():
 
     train_dataset = TextAgentFillDataset(
         args.dataset_root, args.vocabulary, split=args.train_split,
-        samples_per_agent=1, max_agents=args.num_views, num_views=args.num_views,
-        initial_only=True,
+        samples_per_agent=args.samples_per_agent,
+        max_agents=args.num_views, num_views=args.num_views,
+        initial_only=args.samples_per_agent == 1, episode_index=args.episode_index,
+        frontier_sampling=args.frontier_sampling,
+        frontier_image_probability=args.frontier_image_probability,
     )
     val_dataset = TextAgentFillDataset(
         args.dataset_root, args.vocabulary, split=args.val_split,
-        samples_per_agent=1, max_agents=args.num_views, num_views=args.num_views,
-        initial_only=True,
+        samples_per_agent=args.samples_per_agent,
+        max_agents=args.num_views, num_views=args.num_views,
+        initial_only=args.samples_per_agent == 1, episode_index=args.episode_index,
+        frontier_sampling=args.frontier_sampling,
+        frontier_image_probability=args.frontier_image_probability,
     )
     try:
         air_class = train_dataset.vocabulary.class_to_raw.index(126)
@@ -141,6 +173,11 @@ def main():
     ))
     if args.resume:
         trainer.load(args.resume)
+    elif args.initialize:
+        info = trainer.initialize_model(args.initialize)
+        if rank == 0:
+            print(f"initialized_from={args.initialize} source_step={info['source_step']} "
+                  f"new_parameters={info['missing']}", flush=True)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     run = None

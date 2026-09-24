@@ -18,6 +18,7 @@ class FakeTransition(nn.Module):
         return {
             "address_logits": logits, "occurrence_logits": logits[..., 0] - 20,
             "pose": inputs["initial_pose"][:, None].expand(-1, t, -1, -1),
+            "velocity": torch.zeros(b, t, a, 3, device=logits.device),
             "held_logits": torch.zeros(b, t, a, 2, device=logits.device),
             "camera_relative": inputs["camera_relative"][:, None].expand(-1, t, -1, -1),
             "camera_direction": inputs["camera_direction"][:, None].expand(-1, t, -1, -1),
@@ -106,6 +107,7 @@ def test_one_closed_loop_block_has_authoritative_order():
     )
     assert result.rgb.shape == (a, 8, 3, 16, 16)
     assert len(result.snapshots) == 8 and committer.next_transition == 8
+    assert result.snapshots[-1]["agent0"].velocity_xyz == (0.0, 0.0, 0.0)
     assert rollout.condition["voxel_known"].all()
     assert rollout.condition["target_agent"].tolist() == [0, 1]
     assert result.actions[1].sum() == 0

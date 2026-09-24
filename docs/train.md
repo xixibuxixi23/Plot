@@ -13,14 +13,21 @@ For multi-GPU jobs, replace `python` with
 ## M1
 
 ```bash
-python train_scripts/train_geometry_fill.py \
+python train_scripts/train_fill.py \
   --dataset-root "$PLOT_DATASET_ROOT" \
   --vocabulary derived/common/block_vocabulary.json \
-  --output-dir outputs/m1
+  --episode-index derived/m1/s01_episode_index.json \
+  --output-dir outputs/m1 \
+  --samples-per-agent 4 \
+  --frontier-sampling \
+  --frontier-image-probability 0.3333333333
 ```
 
-`train_geometry_bootstrap.py` trains camera/ray geometry alone;
-`train_fill.py` is the direct-fill baseline.
+This is the only M1 architecture. One optional-image `FillNetwork` handles
+image-conditioned initialization, geometry-only frontier completion, and
+image-assisted frontier completion. With four deterministic slots per
+resident, the command above uses a 25/50/25 percent mixture. Known voxels are
+conditioning only; loss and commits are restricted to `fill_mask`.
 
 ## M2
 

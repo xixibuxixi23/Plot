@@ -78,6 +78,7 @@ class FillNetwork(nn.Module):
         )
         self.view_embedding = nn.Parameter(torch.randn(max_views, image_feature_dim) * 0.02)
         self.image_position = nn.Parameter(torch.randn(60, image_feature_dim) * 0.02)
+        self.null_image_token = nn.Parameter(torch.randn(1, 60, image_feature_dim) * 0.02)
         view_layer = nn.TransformerEncoderLayer(
             image_feature_dim, image_heads, image_feature_dim * 4,
             dropout=0.0, activation="gelu", batch_first=True, norm_first=True,
@@ -107,17 +108,29 @@ class FillNetwork(nn.Module):
         self.dec0 = _ConvBlock(base_channels * 2 + base_channels, base_channels)
         self.classifier = nn.Conv3d(base_channels, self.num_block_classes, 1)
 
-    def _image_features(self, images, agent_mask):
+    def _image_features(self, images, agent_mask, image_condition_mask=None):
         if images.ndim != 5:
             raise ValueError("images must have shape [B,A,3,H,W]")
         batch, views = images.shape[:2]
         if views > self.max_views:
             raise ValueError(f"received {views} views, max_views={self.max_views}")
-        fmap = self.image_encoder(images.reshape(batch * views, *images.shape[2:]))
+        if image_condition_mask is None:
+            image_condition_mask = torch.ones(batch, dtype=torch.bool, device=images.device)
+        image_condition_mask = image_condition_mask.bool()
+        conditioned_images = torch.where(
+            image_condition_mask[:, None, None, None, None], images, 0
+        )
+        fmap = self.image_encoder(conditioned_images.reshape(batch * views, *images.shape[2:]))
         tokens = fmap.flatten(2).transpose(1, 2).reshape(batch, views, 60, -1)
         tokens = tokens + self.image_position[None, None] + self.view_embedding[None, :views, None]
-        pooled = self.view_transformer(tokens.mean(2), src_key_padding_mask=~agent_mask.bool())
-        return tokens.reshape(batch, views * 60, -1), pooled
+        tokens = torch.where(
+            image_condition_mask[:, None, None, None], tokens, self.null_image_token[None]
+        )
+        effective_mask = agent_mask.bool() & image_condition_mask[:, None]
+        safe_mask = effective_mask.clone()
+        safe_mask[:, 0] |= ~image_condition_mask
+        pooled = self.view_transformer(tokens.mean(2), src_key_padding_mask=~safe_mask)
+        return tokens.reshape(batch, views * 60, -1), pooled, safe_mask
 
     @staticmethod
     def _grid_coordinates(spatial, device, dtype):
@@ -125,7 +138,8 @@ class FillNetwork(nn.Module):
         return torch.stack(torch.meshgrid(*axes, indexing="ij"), dim=-1).reshape(-1, 3)
 
     def forward(
-        self, voxel_context, known_mask, fill_mask, images, agent_mask, *, return_aux=False,
+        self, voxel_context, known_mask, fill_mask, images, agent_mask,
+        image_condition_mask=None, *, return_aux=False,
     ):
         if voxel_context.ndim != 4:
             raise ValueError("voxel_context must have shape [B,X,Y,Z]")
@@ -139,12 +153,14 @@ class FillNetwork(nn.Module):
         x1 = self.enc1(F.avg_pool3d(x0, 2))
         middle = self.middle(F.avg_pool3d(x1, 2))
 
-        image_tokens, view_tokens = self._image_features(images, agent_mask)
+        image_tokens, view_tokens, effective_mask = self._image_features(
+            images, agent_mask, image_condition_mask
+        )
         image_tokens = self.image_to_voxel(image_tokens)
         query = middle.flatten(2).transpose(1, 2)
         coords = self._grid_coordinates(middle.shape[-3:], query.device, query.dtype)
         query = query + self.voxel_position(coords)[None]
-        padding = (~agent_mask.bool()).unsqueeze(-1).expand(-1, -1, 60).reshape(images.shape[0], -1)
+        padding = (~effective_mask).unsqueeze(-1).expand(-1, -1, 60).reshape(images.shape[0], -1)
         attended, _ = self.cross_attention(
             self.cross_norm(query), image_tokens, image_tokens,
             key_padding_mask=padding, need_weights=False,

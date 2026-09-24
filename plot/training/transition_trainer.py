@@ -34,6 +34,8 @@ def ordered_event_targets(address, valid, null, queries):
 def decode_ordered_events(model, output, null, frames):
     """Scatter each active ordered slot to one frame, resolving collisions once."""
     count=output['event_count_logits'].argmax(-1)
+    slot_active=(torch.arange(output['event_time_logits'].shape[2],device=count.device)
+                 [None,None]<count[...,None])
     time=output['event_time_logits'].argmax(-1)
     address=output['event_address_logits'].argmax(-1)
     block_logits,_=model.event_payloads(output,address)
@@ -47,7 +49,7 @@ def decode_ordered_events(model, output, null, frames):
     dense_confidence=confidence.new_full((b,frames,a),-1.)
     for bi in range(b):
         for ai in range(a):
-            for qi in range(int(count[bi,ai])):
+            for qi in slot_active[bi,ai].nonzero(as_tuple=False).flatten().tolist():
                 ti=int(time[bi,ai,qi])
                 if confidence[bi,ai,qi]<=dense_confidence[bi,ti,ai]:continue
                 dense_confidence[bi,ti,ai]=confidence[bi,ai,qi]
@@ -56,9 +58,10 @@ def decode_ordered_events(model, output, null, frames):
     return dense_address,dense_block,count
 
 
-def tolerant_complete_counts(pred, pred_block, address, target_block, block_mask, valid, null, tolerance=1):
-    """One-to-one complete-edit matches with a small transition tolerance."""
-    correct=predicted=labels=0
+def matched_edit_counts(pred, pred_block, address, target_block, block_mask, valid,
+                        null, tolerance=None):
+    """One-to-one address and complete-edit matches, optionally ignoring time."""
+    localized=complete=predicted=labels=0
     b,_t,a=pred.shape
     for bi in range(b):
         for ai in range(a):
@@ -69,19 +72,30 @@ def tolerant_complete_counts(pred, pred_block, address, target_block, block_mask
             for pi,pt in enumerate(prediction_times):
                 for gi,gt in enumerate(truth_times):
                     delta=abs(pt-gt)
-                    if (delta<=tolerance and pred[bi,pt,ai]==address[bi,gt,ai]
-                            and pred_block[bi,pt,ai]==target_block[bi,gt,ai]):
-                        candidates.append((delta,pi,gi))
+                    if ((tolerance is None or delta<=tolerance)
+                            and pred[bi,pt,ai]==address[bi,gt,ai]):
+                        candidates.append((delta,pi,gi,
+                            bool(pred_block[bi,pt,ai]==target_block[bi,gt,ai])))
             used_p=set();used_g=set()
-            for _delta,pi,gi in sorted(candidates):
+            for _delta,pi,gi,payload_correct in sorted(candidates):
                 if pi in used_p or gi in used_g:continue
-                used_p.add(pi);used_g.add(gi);correct+=1
+                used_p.add(pi);used_g.add(gi);localized+=1
+                complete+=int(payload_correct)
             predicted+=len(prediction_times)
-    return correct,predicted,labels
+    return localized,complete,predicted,labels
+
+
+def tolerant_complete_counts(pred, pred_block, address, target_block, block_mask,
+                             valid, null, tolerance=1):
+    """Backward-compatible complete-edit counts."""
+    _,complete,predicted,labels=matched_edit_counts(
+        pred,pred_block,address,target_block,block_mask,valid,null,tolerance)
+    return complete,predicted,labels
 
 
 def transition_loss(model, output, inputs, targets, null_weight=.1, objective="full",
-                    occurrence_pos_weight=10., occurrence_threshold=.5):
+                    occurrence_pos_weight=10., occurrence_threshold=.5,
+                    event_count_positive_weight=1.):
     state=targets['state_valid'].bool() & inputs['active'][:,None]
     valid=targets['address_valid'].bool() & state
     address=targets['address']; n=output['address_logits'].shape[-1]
@@ -127,7 +141,11 @@ def transition_loss(model, output, inputs, targets, null_weight=.1, objective="f
             count_ce=F.cross_entropy(
                 output['event_count_logits'].flatten(0,1),count_target.flatten(),
                 reduction='none').reshape_as(count_target)
-            terms['event_count']=masked_mean(count_ce,active)
+            count_ce=count_ce*torch.where(
+                count_target>0,count_ce.new_tensor(event_count_positive_weight),
+                count_ce.new_tensor(1.))
+            count_ce=masked_mean(count_ce,active)
+            terms['event_count']=count_ce
             teacher_block,_=model.event_payloads(output,slot_address)
             graph_zero=0.*(
                 output['event_time_logits'].float().sum()
@@ -238,12 +256,24 @@ def transition_loss(model, output, inputs, targets, null_weight=.1, objective="f
         if objective=='no_hp' and 'event_count_logits' in output:
             tolerant_correct,tolerant_predicted,tolerant_labels=tolerant_complete_counts(
                 pred,predicted_block,address,targets['block'],block_mask,valid,n-1,tolerance=1)
-            target_count=positive.sum(1).clamp_max(output['event_count_logits'].shape[-1]-1)
+            tolerant2_localized,tolerant2_correct,_,_=matched_edit_counts(
+                pred,predicted_block,address,targets['block'],block_mask,valid,n-1,tolerance=2)
+            coordinate_localized,coordinate_correct,_,_=matched_edit_counts(
+                pred,predicted_block,address,targets['block'],block_mask,valid,n-1,tolerance=None)
+            queries=output['event_time_logits'].shape[2]
+            target_count=positive.sum(1).clamp_max(queries)
             active=inputs['active'].bool()
             metrics.update(
                 tolerant_correct_edits=tolerant_correct,
                 tolerant_predicted_events=tolerant_predicted,
                 tolerant_block_labels=tolerant_labels,
+                tolerant2_localized_edits=tolerant2_localized,
+                tolerant2_correct_edits=tolerant2_correct,
+                coordinate_localized_edits=coordinate_localized,
+                coordinate_correct_edits=coordinate_correct,
+                false_coordinate_writes=tolerant_predicted-coordinate_localized,
+                false_complete_writes=tolerant_predicted-coordinate_correct,
+                payload_correct_given_coordinate=coordinate_correct/max(1,coordinate_localized),
                 edit_precision_tolerance1=tolerant_correct/max(1,tolerant_predicted),
                 edit_recall_tolerance1=tolerant_correct/max(1,tolerant_labels),
                 event_count_accuracy=float(masked_mean((count_pred==target_count).float(),active)),

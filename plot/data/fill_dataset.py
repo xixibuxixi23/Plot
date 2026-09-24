@@ -125,6 +125,46 @@ def _canonical_rotate_tile(value: np.ndarray, quarter_turns: int) -> tuple[np.nd
     return _shift_xy_without_wrap(rotated, int(shift[0]), int(shift[1])), shift
 
 
+def select_frontier_observation(
+    centers: np.ndarray,
+    start: int,
+    target_agent: int,
+    sample_slot: int,
+    samples_per_agent: int,
+) -> int:
+    """Select a state whose current tile contains voxels unseen by earlier tiles."""
+    if sample_slot <= 0:
+        return int(start)
+    seen = {tuple(int(v) for v in row) for row in centers[start].reshape(-1, 3)}
+    candidates: list[int] = []
+    for observation in range(start + 1, len(centers)):
+        query = tuple(int(v) for v in centers[observation, target_agent])
+        if query not in seen:
+            previous = np.asarray(sorted(seen), dtype=np.int64)
+            if not coverage_mask(np.asarray(query), previous).all():
+                candidates.append(observation)
+                if samples_per_agent == 2:
+                    return observation
+        seen.update(tuple(int(v) for v in row) for row in centers[observation].reshape(-1, 3))
+    if not candidates:
+        return int(start)
+    fraction = (sample_slot - 1) / max(1, samples_per_agent - 2)
+    return candidates[round(fraction * (len(candidates) - 1))]
+
+
+def use_image_condition(
+    sample_slot: int,
+    samples_per_agent: int,
+    frontier_image_probability: float,
+) -> bool:
+    """Deterministically allocate optional-image frontier samples."""
+    if sample_slot == 0:
+        return True
+    frontier_count = max(1, samples_per_agent - 1)
+    image_count = round(frontier_count * frontier_image_probability)
+    return sample_slot > frontier_count - image_count
+
+
 class TextAgentFillDataset(Dataset):
     """Derive regular M1 tiles from continuous TextAgent episodes.
 
@@ -147,6 +187,8 @@ class TextAgentFillDataset(Dataset):
         initial_only: bool = False,
         episode_index: str | Path | None = None,
         canonical_yaw: bool = False,
+        frontier_sampling: bool = False,
+        frontier_image_probability: float = 1.0,
     ):
         self.root = Path(root)
         self.vocabulary = (
@@ -158,6 +200,10 @@ class TextAgentFillDataset(Dataset):
         self.num_views = int(num_views or max_agents)
         self.initial_only = bool(initial_only)
         self.canonical_yaw = bool(canonical_yaw)
+        self.frontier_sampling = bool(frontier_sampling)
+        self.frontier_image_probability = float(frontier_image_probability)
+        if not 0.0 <= self.frontier_image_probability <= 1.0:
+            raise ValueError("frontier_image_probability must be in [0, 1]")
         self.episode_index = Path(episode_index) if episode_index is not None else None
         if self.num_views > self.max_agents:
             raise ValueError("num_views cannot exceed max_agents")
@@ -265,8 +311,13 @@ class TextAgentFillDataset(Dataset):
                     observation = start
                     previous = np.empty((0, 3), dtype=np.int64)
                 else:
-                    fraction = sample_slot / max(1, self.samples_per_agent - 1)
-                    observation = start + int(fraction * max(0, len(centers) - 1 - start))
+                    if self.frontier_sampling:
+                        observation = select_frontier_observation(
+                            centers, start, target_agent, sample_slot, self.samples_per_agent
+                        )
+                    else:
+                        fraction = sample_slot / max(1, self.samples_per_agent - 1)
+                        observation = start + int(fraction * max(0, len(centers) - 1 - start))
                     previous = centers[start:observation].reshape(-1, 3)
                 raw = np.asarray(data["obs_voxel_mt"][observation, target_agent])
                 cam_pos = np.asarray(data["cam_pos"][observation], dtype=np.float32)
@@ -313,22 +364,28 @@ class TextAgentFillDataset(Dataset):
                 camera_position[:, :2] += shift[None] / float(TILE_SIZE)
                 fill &= target_valid
 
+        image_condition = use_image_condition(
+            sample_slot, self.samples_per_agent, self.frontier_image_probability
+        )
         videos = manifest.get("agent_video_files") or [
             f"rgb_agent{i}.mp4" for i in range(int(manifest["num_agents"]))
         ]
         order = order[:len(videos)]
-        if use_cache:
-            decoded = np.stack([
-                _read_cached_image(path / f"m1_rgb_agent{i}.jpg", self.image_size) for i in order
-            ])
-        else:
-            decoded = np.stack([
-                _read_video_frame(path / videos[i], observation, self.image_size) for i in order
-            ])
-        images = np.zeros((self.num_views, *decoded.shape[1:]), dtype=np.float32)
-        images[:len(decoded)] = decoded
+        images = np.zeros((self.num_views, 3, *self.image_size), dtype=np.float32)
+        if image_condition:
+            if use_cache:
+                decoded = np.stack([
+                    _read_cached_image(path / f"m1_rgb_agent{i}.jpg", self.image_size)
+                    for i in order
+                ])
+            else:
+                decoded = np.stack([
+                    _read_video_frame(path / videos[i], observation, self.image_size)
+                    for i in order
+                ])
+            images[:len(decoded)] = decoded
         agent_mask = np.zeros(self.num_views, dtype=bool)
-        agent_mask[:len(decoded)] = True
+        agent_mask[:len(order)] = True
         return {
             "voxel_context": torch.from_numpy(context).long(),
             "known_mask": torch.from_numpy(known),
@@ -337,6 +394,7 @@ class TextAgentFillDataset(Dataset):
             "target_valid": torch.from_numpy(target_valid),
             "images": torch.from_numpy(images),
             "agent_mask": torch.from_numpy(agent_mask),
+            "image_condition_mask": torch.tensor(image_condition, dtype=torch.bool),
             "camera_position": torch.from_numpy(camera_position),
             "camera_direction": torch.from_numpy(camera_direction),
             "camera_valid": torch.from_numpy(camera_valid),

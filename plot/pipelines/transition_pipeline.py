@@ -18,7 +18,7 @@ class TransitionCommitter:
         self.next_transition=0
 
     def commit(self, *, resident_ids, anchors, pose, address, block_payload, hp_payload,
-               held_item, camera_relative, camera_direction, after_step=None):
+               held_item, camera_relative, camera_direction, velocity=None, after_step=None):
         """Inputs are unbatched numpy arrays; callback captures memory before next step.
 
         This interface requires the fixed-hotbar adapter to have been validated.
@@ -31,12 +31,17 @@ class TransitionCommitter:
             raise ValueError('expected eight steps, all residents, and fixed integer anchors')
         if not np.equal(anchors,np.floor(anchors)).all():raise ValueError('anchors must be integers')
         if np.any(address<0) or np.any(address>2197+a):raise ValueError('invalid write address')
-        for array in (pose,hp_payload,camera_relative,camera_direction):
+        if velocity is None:
+            previous = np.asarray([self.chars[name].position_xyz for name in resident_ids], np.float32)
+            velocity = np.diff(np.concatenate((previous[None], pose[..., :3]), axis=0), axis=0)
+        velocity = np.asarray(velocity)
+        for array in (pose,velocity,hp_payload,camera_relative,camera_direction):
             if not np.isfinite(array).all():raise ValueError('non-finite prediction')
         if hp_payload.shape!=(8,a) or block_payload.shape!=(8,a) or held_item.shape!=(8,a):
             raise ValueError('payload arrays must be [8,A]')
         if camera_relative.shape!=(8,a,3) or camera_direction.shape!=(8,a,3):
             raise ValueError('camera arrays must be [8,A,3]')
+        if velocity.shape!=(8,a,3):raise ValueError('velocity must be [8,A,3]')
         if np.any(np.asarray(block_payload)<0):raise ValueError('negative block class')
         for i in range(a):
             if np.any(address[:,i]==2197+i):raise ValueError('self-address is not a resident interaction')
@@ -64,6 +69,7 @@ class TransitionCommitter:
             for i,name in enumerate(resident_ids):
                 row=self.chars[name]
                 row.position_xyz=tuple(float(v) for v in pose[k,i,:3])
+                row.velocity_xyz=tuple(float(v) for v in velocity[k,i])
                 row.yaw,row.pitch=(float(v) for v in pose[k,i,3:])
                 row.hp+=hp_changes[name]
                 row.held_item=int(held_item[k,i])

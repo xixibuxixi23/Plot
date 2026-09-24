@@ -8,7 +8,7 @@ from plot.models.transition import TransitionArgs,TransitionNetwork
 from plot.pipelines.transition_pipeline import TransitionCommitter,held_item_trajectory
 from plot.transition_state import CharRow
 from plot.world_memory import WorldMemory
-from plot.training.transition_trainer import transition_loss
+from plot.training.transition_trainer import decode_ordered_events,matched_edit_counts,transition_loss
 
 
 torch.set_num_threads(2)
@@ -76,6 +76,19 @@ def add_edit_process_targets(value):
     value['targets']['edit_progress_valid'][1:3,0]=True
     value['targets']['edit_target'][1:3,0]=10
     value['targets']['edit_target_valid'][1:3,0]=True
+    return value
+
+
+def add_event_context(value,frames=4):
+    a=value['inputs']['active'].numel()
+    value['inputs'].update(
+        event_context_actions=torch.zeros(frames,a,23),
+        event_context_pose=torch.zeros(frames,a,5),
+        event_context_hp=torch.full((frames,a),20.),
+        event_context_held_item=torch.zeros(frames,a,dtype=torch.long),
+        event_context_camera_relative=torch.zeros(frames,a,3),
+        event_context_camera_direction=torch.tensor([0.,1.,0.]).expand(frames,a,3).clone(),
+        event_context_valid=torch.ones(frames,a,dtype=torch.bool))
     return value
 
 
@@ -152,14 +165,15 @@ def test_commit_last_voxel_write_and_sum_damage_once():
     address[0,:2]=1098;address[1,:2]=2199
     blocks=np.zeros((8,3),np.int64);blocks[0,:2]=[1,2]
     damage=np.zeros((8,3));damage[1,:2]=[-2,-3]
-    captured=[]
+    captured=[];pose=np.zeros((8,3,5));pose[:,:,0]=np.arange(1,9)[:,None]
     snapshots=runner.commit(resident_ids=[f'agent{i}' for i in range(3)],anchors=np.zeros((3,3)),
-                            pose=np.zeros((8,3,5)),address=address,block_payload=blocks,hp_payload=damage,
+                            pose=pose,address=address,block_payload=blocks,hp_payload=damage,
                             held_item=np.zeros((8,3)),camera_relative=np.zeros((8,3,3)),
                             camera_direction=np.tile([0,1,0],(8,3,1)),
                             after_step=lambda t,m,c,e:captured.append((t,c['agent2'].hp)))
     assert memory.read_region([0,0,0],(1,1,1))[0].item()==2
     assert snapshots[0]['agent2'].hp==20 and snapshots[1]['agent2'].hp==15
+    assert snapshots[-1]['agent0'].velocity_xyz==(1.,0.,0.)
     assert len(runner.ledger)==4 and captured==[(0,20)]+[(i,15) for i in range(1,8)]
     assert memory.read_region([-6,-6,-6],(13,13,13))[0].shape==(13,13,13)
 
@@ -264,6 +278,36 @@ def test_ordered_event_slots_predict_count_and_one_time_per_slot():
     assert selected.shape==(1,2,4)
 
 
+def test_edit_metrics_separate_strict_timing_tolerance_and_coordinate_coverage():
+    null=2198
+    truth=torch.full((1,8,1),null);truth[0,3,0]=17
+    predicted=torch.full_like(truth,null);predicted[0,1,0]=17
+    truth_block=torch.zeros_like(truth);truth_block[0,3,0]=2
+    predicted_block=torch.zeros_like(truth);predicted_block[0,1,0]=2
+    valid=torch.ones_like(truth,dtype=torch.bool)
+    block_valid=torch.zeros_like(valid);block_valid[0,3,0]=True
+    assert matched_edit_counts(predicted,predicted_block,truth,truth_block,
+                               block_valid,valid,null,tolerance=1)[:2]==(0,0)
+    assert matched_edit_counts(predicted,predicted_block,truth,truth_block,
+                               block_valid,valid,null,tolerance=2)[:2]==(1,1)
+    assert matched_edit_counts(predicted,predicted_block,truth,truth_block,
+                               block_valid,valid,null,tolerance=None)[:2]==(1,1)
+
+
+def test_ordered_events_attend_to_preceding_action_and_state_context():
+    cfg=TransitionArgs(3,10,width=32,depth=2,heads=4,event_context_frames=4)
+    net=TransitionNetwork(cfg).eval()
+    mixed=collate_transition([add_event_context(sample(2)),add_event_context(sample(4))])
+    assert mixed['inputs']['event_context_actions'].shape==(2,4,4,23)
+    assert not mixed['inputs']['event_context_valid'][0,:,2:].any()
+    inputs={key:value[:1] for key,value in mixed['inputs'].items()}
+    with torch.no_grad():
+        first=net(inputs)['event_count_logits']
+        inputs['event_context_actions'][:,-1,:,9]=1
+        second=net(inputs)['event_count_logits']
+    assert not torch.allclose(first,second)
+
+
 def test_no_hp_objective_supervises_postprocessed_edit_process():
     net=model();batch=collate_transition([add_edit_process_targets(sample())]);out=net(batch['inputs'])
     loss,metrics=transition_loss(net,out,**{k:batch[k] for k in ('inputs','targets')},objective='no_hp')
@@ -285,6 +329,19 @@ def test_payload_uses_consistent_updated_view_when_first_resident_is_stale():
     assert not labels['block_valid'][0,0]
 
 
+def test_payload_waits_for_first_confirmed_post_event_voxel_state():
+    raw=np.full((9,1,49,49,49,2),126,np.int16)
+    centers=np.zeros((9,1,3),np.int64);raw[2:,0,24,24,24,0]=244
+    hp=np.full((9,1),20.)
+    event={'event':'block_placed','actor':'agent0','position':{'x':0,'y':0,'z':0}}
+    labels,stats=build_write_labels(
+        {0:[event]},0,['agent0'],np.zeros((1,3),dtype=int),hp,raw,centers,
+        BlockVocabulary((126,244)),strict_block_payload=True)
+    assert labels['block_valid'][0,0] and labels['block'][0,0]==1
+    assert stats['payload_confirmed_after_delay']==1
+    assert stats['payload_confirmation_delay_steps']==1
+
+
 def test_stream_shards_cover_each_episode_once_across_ranks_and_workers(tmp_path,monkeypatch):
     import json
     from types import SimpleNamespace
@@ -293,7 +350,10 @@ def test_stream_shards_cover_each_episode_once_across_ranks_and_workers(tmp_path
     index=tmp_path/'index.json';index.write_text(json.dumps({'dataset_root':'/old/machine/path','splits':{'train':records}}))
     vocab=tmp_path/'vocab.json';vocab.write_text(json.dumps({'class_to_raw':[126,244]}))
     cache=tmp_path/'cache'/'train';cache.mkdir(parents=True)
-    for i,r in enumerate(records):torch.save({'samples':[{'id':i}]},cache/(r['path'].split('/')[-1]+'.pt'))
+    for i,r in enumerate(records):
+        torch.save({'samples':[{'id':i}],
+                    'transition_cache_revision':module.TRANSITION_CACHE_REVISION},
+                   cache/(r['path'].split('/')[-1]+'.pt'))
     all_ids=[]
     for rank in range(8):
         for worker in range(4):

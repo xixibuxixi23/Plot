@@ -6,7 +6,7 @@ PLOT 是 **Multi-Inhabitant World Models with Writable 3D Memory** 的主代码�
 
 | 模块 | 入口 | 作用 |
 |---|---|---|
-| M1 | `experiments/m1/train_multiview_persist_full.py` | 从视觉证据补全 48³ 世界记忆 |
+| M1 | `train_scripts/train_fill.py` | 统一完成图像初始化和已知边界向未知区域续写 |
 | M2 | `train_scripts/train_transition_full.py` | 预测运动、交互目标和稀疏写入 |
 | M3 | `train_scripts/train_renderer.py` | 65 帧 causal diffusion-forcing 渲染器 |
 | M4 | `train_scripts/train_policy.py` | 根据完成的 M3 观察预测 8 步动作 |
