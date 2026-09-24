@@ -953,6 +953,38 @@ def test_resume_can_append_item_embedding_and_adam_rows():
     extended_optimizer.step()
 
 
+def test_resume_can_override_lr_without_resetting_adam_state():
+    model = tiny_model(simple_conditioning=True, qk_rms_norm=True)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-5)
+    model(torch.randn(1, 65, 16, 4, 4), torch.rand(1, 65), conditions(65)).mean().backward()
+    optimizer.step()
+    checkpoint = {
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "step": 33_000,
+        "config": {"item_vocabulary": {"pick": 2}},
+    }
+
+    resumed = tiny_model(simple_conditioning=True, qk_rms_norm=True)
+    resumed_optimizer = torch.optim.AdamW(resumed.parameters(), lr=1e-5)
+    report = load_renderer_resume(
+        resumed,
+        resumed_optimizer,
+        checkpoint,
+        {"pick": 2},
+        optimizer_lrs=[1e-5],
+    )
+
+    assert report["optimizer_saved_lrs"] == [3e-5]
+    assert report["optimizer_active_lrs"] == [1e-5]
+    assert resumed_optimizer.param_groups[0]["lr"] == 1e-5
+    assert resumed_optimizer.state
+    original_state = next(iter(optimizer.state.values()))
+    resumed_state = next(iter(resumed_optimizer.state.values()))
+    torch.testing.assert_close(resumed_state["exp_avg"], original_state["exp_avg"])
+    torch.testing.assert_close(resumed_state["exp_avg_sq"], original_state["exp_avg_sq"])
+
+
 def test_resume_rejects_existing_item_id_changes():
     model = tiny_model()
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
