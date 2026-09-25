@@ -96,6 +96,12 @@ def tolerant_complete_counts(pred, pred_block, address, target_block, block_mask
 def transition_loss(model, output, inputs, targets, null_weight=.1, objective="full",
                     occurrence_pos_weight=10., occurrence_threshold=.5,
                     event_count_positive_weight=1.):
+    if model.cfg.unified_interactions:
+        if objective not in {'full','unified'}:
+            raise ValueError('unified M2 needs objective=unified/full; no_hp would omit attacks')
+        from plot.training.unified_transition import unified_transition_loss
+        return unified_transition_loss(model,output,inputs,targets,
+                                       event_count_positive_weight=event_count_positive_weight)
     state=targets['state_valid'].bool() & inputs['active'][:,None]
     valid=targets['address_valid'].bool() & state
     address=targets['address']; n=output['address_logits'].shape[-1]

@@ -27,6 +27,11 @@ class TransitionArgs:
     attack_decoder_layers: int = 2
     attack_null_logit_bias: float = 0.
     kinematics: KinematicsConfig = field(default_factory=KinematicsConfig)
+    # Opt-in: one dynamics trunk and one decoder for voxel AND resident writes.
+    # Defaults preserve the architecture/state_dict of every legacy checkpoint.
+    unified_interactions: bool = False
+    unified_use_rgb: bool = False
+    air_class: int | None = None
 
 
 class TransitionBlock(nn.Module):
@@ -76,6 +81,13 @@ class TransitionNetwork(nn.Module):
     def __init__(self, cfg: TransitionArgs):
         super().__init__()
         self.cfg = cfg
+        if cfg.unified_interactions:
+            if cfg.player_branch or cfg.attack_branch:
+                raise ValueError('unified_interactions replaces player_branch and attack_branch')
+            if cfg.air_class is None or not 0 <= cfg.air_class < cfg.num_block_classes:
+                raise ValueError('unified_interactions requires the vocabulary air_class')
+            if not 1 <= cfg.event_queries <= 8:
+                raise ValueError('unified event_queries must be in [1, 8]')
         d = cfg.width
         self.block_embedding = nn.Embedding(cfg.num_block_classes+1,d)
         self.voxel_cnn = nn.Sequential(nn.Conv3d(d,d,3,padding=1,groups=d),nn.GELU(),nn.Conv3d(d,d,1))
@@ -99,6 +111,9 @@ class TransitionNetwork(nn.Module):
             nn.LayerNorm(d),nn.Linear(d,2*d),nn.GELU(),nn.Linear(2*d,d))
         nn.init.zeros_(self.player_adapter[-1].weight)
         nn.init.zeros_(self.player_adapter[-1].bias)
+        if cfg.unified_interactions:
+            self.player_adapter = nn.Identity()
+            self.velocity_condition = nn.Linear(3,d)
         self.pose_head = nn.Linear(d,5)
         self.camera_head = nn.Linear(d,6)
         self.hp_aux = nn.Linear(d,1)
@@ -123,7 +138,8 @@ class TransitionNetwork(nn.Module):
             nn.LayerNorm(2*d),nn.Linear(2*d,d),nn.GELU(),
             nn.Linear(d,cfg.event_queries+1))
         self.event_time_head = nn.Linear(d,8)
-        self.event_operation_head = nn.Linear(d,2)
+        # Unified operations: remove=0, place=1, attack=2. No event is count=0.
+        self.event_operation_head = nn.Linear(d,3 if cfg.unified_interactions else 2)
         self.event_pointer_query = nn.Linear(d,d)
         if cfg.event_context_frames:
             self.event_context_time_embedding=nn.Parameter(
@@ -192,23 +208,32 @@ class TransitionNetwork(nn.Module):
         state = self.state(state) * active[...,None]
         relative = (pose[:,None,:,:3]-pose[:,:,None,:3])/6.
         residents = state[:,None].expand(-1,a,-1,-1) + self.coordinate(relative)
-        pixels = self.visual(inputs['previous_rgb'].reshape(b*a,3,*inputs['previous_rgb'].shape[-2:]))
-        pixels = pixels.flatten(2).transpose(1,2).reshape(b,a,16,d)
-        memory = torch.cat((v,residents,pixels),2).reshape(b*a,2197+a+16,d)
+        if self.cfg.unified_interactions and not self.cfg.unified_use_rgb:
+            pixels = v.new_zeros(b,a,0,d)
+        else:
+            pixels = self.visual(inputs['previous_rgb'].reshape(b*a,3,*inputs['previous_rgb'].shape[-2:]))
+            pixels = pixels.flatten(2).transpose(1,2).reshape(b,a,16,d)
+        memory = torch.cat((v,residents,pixels),2).reshape(b*a,2197+a+pixels.shape[2],d)
         # Unknown is an explicit input token; only padded resident keys are excluded.
         padding = torch.cat((torch.zeros(b,a,2197,device=v.device,dtype=torch.bool),
                              ~active[:,None].expand(b,a,a),
-                             torch.zeros(b,a,16,device=v.device,dtype=torch.bool)),2).reshape(b*a,-1)
+                             torch.zeros(b,a,pixels.shape[2],device=v.device,dtype=torch.bool)),2).reshape(b*a,-1)
         proposal = propose_trajectory(pose,inputs['actions'],self.cfg.kinematics)
         proposal_features = torch.cat((proposal[...,:3]/6.,proposal[...,3:].sin(),proposal[...,3:].cos()),-1)
         q = self.action(inputs['actions']) + self.proposal(proposal_features)
         held,held_valid=held_item_trajectory(inputs)
         held=torch.where(held_valid,held,inputs['held_item'][:,None])
         q = q + self.held_condition(self.item_embedding(held))
-        q = q + state[:,None] + pixels.mean(2)[:,None] + self.time_embedding[None,:,None]
+        if pixels.shape[2]:
+            q = q + state[:,None] + pixels.mean(2)[:,None] + self.time_embedding[None,:,None]
+        else:
+            q = q + state[:,None] + self.time_embedding[None,:,None]
+        if self.cfg.unified_interactions:
+            velocity = inputs.get('initial_velocity',torch.zeros_like(pose[...,:3]))
+            q = q + self.velocity_condition(velocity/self.cfg.kinematics.distance_per_step)[:,None]
         for block in self.blocks:
             q = block(q,memory,padding,active)
-        player_q = q + self.player_adapter(q)
+        player_q = q if self.cfg.unified_interactions else q + self.player_adapter(q)
         candidates = torch.cat((v+self.target_type.weight[0],residents+self.target_type.weight[1],
                                  (self.null_token+self.target_type.weight[2]).expand(b,a,1,d)),2)
         logits = torch.einsum('btad,band->btan',self.pointer_query(q),self.pointer_key(candidates))/d**.5
@@ -258,8 +283,8 @@ class TransitionNetwork(nn.Module):
         summary=summary/event_memory_valid.sum(1,keepdim=True).clamp_min(1)
         event_summary=summary.reshape(b,a,d)
         event_count=self.event_count_head(torch.cat((event_summary,event.mean(2)),-1))
-        event_candidates=candidates[:,:,:-1]
-        event_valid=candidate_valid[:,:,:-1]
+        event_candidates=candidates if self.cfg.unified_interactions else candidates[:,:,:-1]
+        event_valid=candidate_valid if self.cfg.unified_interactions else candidate_valid[:,:,:-1]
         event_address=torch.einsum(
             'baqd,band->baqn',self.event_pointer_query(event),self.pointer_key(event_candidates)
         )/d**.5
@@ -279,10 +304,14 @@ class TransitionNetwork(nn.Module):
                 'event_operation_logits':self.event_operation_head(event),
                 'event_address_logits':event_address,'address_logits':logits,
                 'hp_aux':inputs['initial_hp'][:,None]+self.hp_aux(q).squeeze(-1),
-                'hidden':q,'candidates':candidates}
+                'hidden':q,'candidates':candidates,
+                **({'active':active} if self.cfg.unified_interactions else {})}
 
     def forward_player(self,inputs):
         """Predict resident state without materializing visual or voxel memory."""
+        if self.cfg.unified_interactions:
+            # Same shared trunk; there is deliberately no player-only network.
+            return self.forward(inputs)
         if not self.cfg.player_branch:raise RuntimeError('player branch is disabled')
         active=inputs['active'].bool();pose=inputs['initial_pose'];b,a=active.shape
         embedding=self.player_item_embedding
@@ -370,14 +399,27 @@ class TransitionNetwork(nn.Module):
     def event_payloads(self, output, addresses):
         """Decode ordered-slot payloads at slot-selected candidate addresses."""
         event=output['event_hidden'];b,a,q,d=event.shape
-        candidates=output['candidates'][:,:,:-1]
+        candidates=(output['candidates'] if self.cfg.unified_interactions
+                    else output['candidates'][:,:,:-1])
         selected=candidates[:,:,None].expand(-1,-1,q,-1,-1).gather(
             3,addresses[...,None,None].expand(b,a,q,1,d)).squeeze(3)
         h=self.payload(torch.cat((event,selected),-1))
-        return self.block_head(h),self.damage_head(h).squeeze(-1)
+        damage=self.damage_head(h).squeeze(-1)
+        if self.cfg.unified_interactions:
+            damage=-nn.functional.softplus(damage)
+        return self.block_head(h),damage
+
+    def decode_interactions(self,output):
+        """Unified ordered events -> the existing eight-step committer interface."""
+        if not self.cfg.unified_interactions:
+            raise ValueError('decode_interactions requires unified_interactions')
+        from plot.training.unified_transition import decode_unified_interactions
+        return decode_unified_interactions(self,output)
 
     def decode_attacks(self,output):
         """Return calibrated ordered attacks; each slot has exactly one time."""
+        if self.cfg.unified_interactions:
+            raise ValueError('use decode_interactions; unified attacks are not a separate stream')
         logits=output['attack_count_logits'].clone()
         logits[...,0]+=self.cfg.attack_null_logit_bias
         count=logits.argmax(-1);queries=output['attack_time_logits'].shape[-2]

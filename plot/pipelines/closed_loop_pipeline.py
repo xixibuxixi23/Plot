@@ -22,6 +22,8 @@ class ClosedLoopBlock:
 def decode_transition(model, inputs, occurrence_threshold=0.5):
     """Decode the typed sparse M2 distribution into committer tensors."""
     output = model(inputs)
+    if getattr(getattr(model, 'cfg', None), 'unified_interactions', False):
+        return model.decode_interactions(output)
     nonnull = output["address_logits"][..., :-1].argmax(-1)
     null = output["address_logits"].shape[-1] - 1
     address = torch.where(
